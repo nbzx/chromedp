@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"sync"
 	"time"
+	"strings"
 
 	"github.com/nbzx/cdproto/css"
 	"github.com/nbzx/cdproto/dom"
@@ -204,7 +205,7 @@ func (c *Context) newSession(ctx context.Context) error {
 		}
 		pages := 0
 		for _, info := range infos {
-			if info.Type == "page" && info.URL == "about:blank" && !info.Attached {
+			if info.Type == "page" && (info.URL == "about:blank" || strings.HasPrefix(info.URL, "http")) && !info.Attached {
 				targetID = info.TargetID
 				pages++
 			}

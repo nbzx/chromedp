@@ -172,6 +172,9 @@ func (t *Target) processEvent(ctx context.Context, msg *cdproto.Message) error {
 // root for the root frame.
 func (t *Target) documentUpdated(ctx context.Context) {
 	f := t.cur
+	if f == nil{
+		return
+	}
 	f.Lock()
 	defer f.Unlock()
 
