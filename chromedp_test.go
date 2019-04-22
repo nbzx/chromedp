@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/chromedp/cdproto/target"
+	"github.com/nbzx/cdproto/target"
 )
 
 var (

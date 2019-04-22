@@ -1,6 +1,6 @@
 // +build ignore
 
-package main
+package kb
 
 import (
 	"bytes"
@@ -15,8 +15,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-
-	"github.com/chromedp/chromedp/kb"
 )
 
 var (

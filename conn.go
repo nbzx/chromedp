@@ -7,7 +7,7 @@ import (
 	"context"
 	"io"
 
-	"github.com/chromedp/cdproto"
+	"github.com/nbzx/cdproto"
 	"github.com/gorilla/websocket"
 	"github.com/mailru/easyjson"
 	"github.com/mailru/easyjson/jlexer"

@@ -8,8 +8,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-
-	"github.com/chromedp/chromedp"
 )
 
 func ExampleTitle() {
@@ -18,7 +16,7 @@ func ExampleTitle() {
 
 	var title string
 	if err := chromedp.Run(ctx,
-		chromedp.Navigate("https://github.com/chromedp/chromedp/issues"),
+		chromedp.Navigate("https://github.com/nbzx/chromedp/issues"),
 		chromedp.WaitVisible("#start-of-content", chromedp.ByID),
 		chromedp.Title(&title),
 	); err != nil {

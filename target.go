@@ -9,12 +9,12 @@ import (
 
 	"github.com/mailru/easyjson"
 
-	"github.com/chromedp/cdproto"
-	"github.com/chromedp/cdproto/cdp"
-	"github.com/chromedp/cdproto/dom"
-	"github.com/chromedp/cdproto/inspector"
-	"github.com/chromedp/cdproto/page"
-	"github.com/chromedp/cdproto/target"
+	"github.com/nbzx/cdproto"
+	"github.com/nbzx/cdproto/cdp"
+	"github.com/nbzx/cdproto/dom"
+	"github.com/nbzx/cdproto/inspector"
+	"github.com/nbzx/cdproto/page"
+	"github.com/nbzx/cdproto/target"
 )
 
 // Target manages a Chrome DevTools Protocol target.

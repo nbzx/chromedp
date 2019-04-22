@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/chromedp/cdproto/cdp"
+	"github.com/nbzx/cdproto/cdp"
 )
 
 // Action is the common interface for an action that will be executed against a

@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chromedp/cdproto/emulation"
-	"github.com/chromedp/cdproto/page"
+	"github.com/nbzx/cdproto/emulation"
+	"github.com/nbzx/cdproto/page"
 )
 
 func TestNavigate(t *testing.T) {

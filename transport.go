@@ -4,7 +4,7 @@ import (
 	"context"
 	"io"
 
-	"github.com/chromedp/cdproto"
+	"github.com/nbzx/cdproto"
 )
 
 // Transport is the common interface to send/receive messages to a target.

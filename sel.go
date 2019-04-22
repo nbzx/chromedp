@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/chromedp/cdproto/cdp"
-	"github.com/chromedp/cdproto/dom"
+	"github.com/nbzx/cdproto/cdp"
+	"github.com/nbzx/cdproto/dom"
 )
 
 /*

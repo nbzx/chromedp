@@ -8,7 +8,7 @@ import (
 	"runtime"
 	"unicode"
 
-	"github.com/chromedp/cdproto/input"
+	"github.com/nbzx/cdproto/input"
 )
 
 // Key contains information for generating a key press based off the unicode

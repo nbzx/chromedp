@@ -12,13 +12,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/chromedp/cdproto/css"
-	"github.com/chromedp/cdproto/dom"
-	"github.com/chromedp/cdproto/inspector"
-	"github.com/chromedp/cdproto/log"
-	"github.com/chromedp/cdproto/page"
-	"github.com/chromedp/cdproto/runtime"
-	"github.com/chromedp/cdproto/target"
+	"github.com/nbzx/cdproto/css"
+	"github.com/nbzx/cdproto/dom"
+	"github.com/nbzx/cdproto/inspector"
+	"github.com/nbzx/cdproto/log"
+	"github.com/nbzx/cdproto/page"
+	"github.com/nbzx/cdproto/runtime"
+	"github.com/nbzx/cdproto/target"
 )
 
 // Context is attached to any context.Context which is valid for use with Run.

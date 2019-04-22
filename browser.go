@@ -10,10 +10,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/chromedp/cdproto"
-	"github.com/chromedp/cdproto/cdp"
-	"github.com/chromedp/cdproto/runtime"
-	"github.com/chromedp/cdproto/target"
+	"github.com/nbzx/cdproto"
+	"github.com/nbzx/cdproto/cdp"
+	"github.com/nbzx/cdproto/runtime"
+	"github.com/nbzx/cdproto/target"
 	jlexer "github.com/mailru/easyjson/jlexer"
 )
 
