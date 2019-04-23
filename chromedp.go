@@ -168,6 +168,14 @@ func Cancel(ctx context.Context) error {
 	return c.cancelErr
 }
 
+func Shutdown(ctx context.Context) error {
+	c := FromContext(ctx)
+	if c == nil {
+		return ErrInvalidContext
+	}
+	return c.Browser.process.Kill()
+}
+
 // Run runs an action against context. The provided context must be a valid
 // chromedp context, typically created via NewContext.
 func Run(ctx context.Context, actions ...Action) error {

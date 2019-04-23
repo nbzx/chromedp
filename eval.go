@@ -103,3 +103,14 @@ func EvalIgnoreExceptions(p *runtime.EvaluateParams) *runtime.EvaluateParams {
 func EvalAsValue(p *runtime.EvaluateParams) *runtime.EvaluateParams {
 	return p.WithReturnByValue(true)
 }
+
+
+// 等待Promise选项
+func EvalAsAwaitPromis(p *runtime.EvaluateParams) *runtime.EvaluateParams {
+	return p.WithAwaitPromise(true)
+}
+
+// 等待Promise
+func EvaluateAsAwaitPromise(expression string, res interface{}, opts ...EvaluateOption) Action {
+	return Evaluate(expression, res, append(opts, EvalAsAwaitPromis)...)
+}
