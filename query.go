@@ -292,6 +292,17 @@ func AttributeValue(sel interface{}, name string, value *string, ok *bool, opts 
 	}, opts...)
 }
 
+//赋值内部html
+//func SetInnerHtml(sel interface{}, html string, opts ...QueryOption) Action {
+//	return QueryAfter(sel, func(ctx context.Context, h *Target, nodes ...*cdp.Node) error {
+//		if len(nodes) < 1 {
+//			return fmt.Errorf("selector `%s` did not return any nodes", sel)
+//		}
+//
+//		return dom.SetInnerHTML(nodes[0].NodeID, html).Do(ctx, h)
+//	}, opts...)
+//}
+
 // SetAttributeValue sets the element attribute with name to value for the
 // first node matching the selector.
 func SetAttributeValue(sel interface{}, name, value string, opts ...QueryOption) Action {
