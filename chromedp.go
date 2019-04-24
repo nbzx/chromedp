@@ -168,12 +168,20 @@ func Cancel(ctx context.Context) error {
 	return c.cancelErr
 }
 
+//结束进程
 func Shutdown(ctx context.Context) error {
 	c := FromContext(ctx)
 	if c == nil {
 		return ErrInvalidContext
 	}
 	return c.Browser.process.Kill()
+}
+//等待chrome进程
+func Wait(ctx context.Context) {
+	c := FromContext(ctx)
+	if c != nil {
+		c.wg.Wait()
+	}
 }
 
 // Run runs an action against context. The provided context must be a valid

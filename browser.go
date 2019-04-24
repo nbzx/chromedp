@@ -21,15 +21,14 @@ import (
 // the browser process runner, WebSocket clients, associated targets, and
 // network, page, and DOM events.
 type Browser struct {
+	// next is the next message id.
+	next int64
 	// LostConnection is closed when the websocket connection to Chrome is
 	// dropped. This can be useful to make sure that Browser's context is
 	// cancelled (and the handler stopped) once the connection has failed.
 	LostConnection chan struct{}
 
 	conn Transport
-
-	// next is the next message id.
-	next int64
 
 	// newTabQueue is the queue used to create new target handlers, once a new
 	// tab is created and attached to. The newly created Target is sent back
