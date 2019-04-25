@@ -114,7 +114,7 @@ func (a *ExecAllocator) Allocate(ctx context.Context, opts ...BrowserOption) (*B
 
 	// Force the first page to be blank, instead of the welcome page;
 	// --no-first-run doesn't enforce that.
-	args = append(args, "about:blank")
+	//args = append(args, "about:blank")
 
 	cmd := exec.CommandContext(ctx, a.execPath, args...)
 
