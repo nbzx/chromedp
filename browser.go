@@ -2,7 +2,8 @@ package chromedp
 
 import (
 	"context"
-	"encoding/json"
+	"fmt"
+	"io"
 	"log"
 	"net"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"github.com/nbzx/cdproto/cdp"
 	"github.com/nbzx/cdproto/runtime"
 	"github.com/nbzx/cdproto/target"
+	easyjson "github.com/mailru/easyjson"
 	jlexer "github.com/mailru/easyjson/jlexer"
 )
 
@@ -58,6 +60,16 @@ type Browser struct {
 	userDataDir string
 }
 
+// TODO: move Transport to the same file as its default implementation once we
+// settle on one websocket library.
+
+// Transport is the common interface to send/receive messages to a target.
+type Transport interface {
+	Read(context.Context, *cdproto.Message) error
+	Write(context.Context, *cdproto.Message) error
+	io.Closer
+}
+
 type cmdJob struct {
 	// msg is the message being sent.
 	msg *cdproto.Message
@@ -96,9 +108,10 @@ func NewBrowser(ctx context.Context, urlstr string, opts ...BrowserOption) (*Bro
 
 	// dial
 	var err error
-	b.conn, err = DialContext(ctx, forceIP(urlstr), WithConnDebugf(b.dbgf))
+	urlstr = forceIP(urlstr)
+	b.conn, err = DialContext(ctx, urlstr, WithConnDebugf(b.dbgf))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("could not dial %q: %v", urlstr, err)
 	}
 
 	go b.run(ctx)
@@ -139,7 +152,7 @@ func (b *Browser) newExecutorForTarget(ctx context.Context, targetID target.ID, 
 		SessionID: sessionID,
 
 		eventQueue: make(chan *cdproto.Message, 1024),
-		waitQueue:  make(chan func(cur *cdp.Frame) bool, 1024),
+		waitQueue:  make(chan func() bool, 1024),
 		frames:     make(map[cdp.FrameID]*cdp.Frame),
 
 		logf: b.logf,
@@ -154,11 +167,11 @@ func (b *Browser) newExecutorForTarget(ctx context.Context, targetID target.ID, 
 	return t
 }
 
-func (b *Browser) Execute(ctx context.Context, method string, params json.Marshaler, res json.Unmarshaler) error {
+func (b *Browser) Execute(ctx context.Context, method string, params easyjson.Marshaler, res easyjson.Unmarshaler) error {
 	paramsMsg := emptyObj
 	if params != nil {
 		var err error
-		if paramsMsg, err = json.Marshal(params); err != nil {
+		if paramsMsg, err = easyjson.Marshal(params); err != nil {
 			return err
 		}
 	}
@@ -181,7 +194,7 @@ func (b *Browser) Execute(ctx context.Context, method string, params json.Marsha
 		case msg.Error != nil:
 			return msg.Error
 		case res != nil:
-			return json.Unmarshal(msg.Result, res)
+			return easyjson.Unmarshal(msg.Result, res)
 		}
 	case <-ctx.Done():
 		return ctx.Err()

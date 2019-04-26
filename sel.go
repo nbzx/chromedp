@@ -24,9 +24,9 @@ tagname
 type Selector struct {
 	sel   interface{}
 	exp   int
-	by    func(context.Context, *Target, *cdp.Node) ([]cdp.NodeID, error)
-	wait  func(context.Context, *Target, *cdp.Frame, ...cdp.NodeID) ([]*cdp.Node, error)
-	after func(context.Context, *Target, ...*cdp.Node) error
+	by    func(context.Context, *cdp.Node) ([]cdp.NodeID, error)
+	wait  func(context.Context, *cdp.Frame, ...cdp.NodeID) ([]*cdp.Node, error)
+	after func(context.Context, ...*cdp.Node) error
 }
 
 // Query is an action to query for document nodes match the specified sel and
@@ -54,28 +54,27 @@ func Query(sel interface{}, opts ...QueryOption) Action {
 }
 
 // Do satisfies the Action interface.
-func (s *Selector) Do(ctx context.Context, h cdp.Executor) error {
-	th, ok := h.(*Target)
-	if !ok {
-		return ErrInvalidHandler
+func (s *Selector) Do(ctx context.Context) error {
+	t := cdp.ExecutorFromContext(ctx).(*Target)
+	if t == nil {
+		return ErrInvalidTarget
 	}
-
 	var err error
 	select {
-	case err = <-s.run(ctx, th):
+	case err = <-s.run(ctx, t):
 	case <-ctx.Done():
 		err = ctx.Err()
 	}
-
 	return err
 }
 
 // run runs the selector action, starting over if the original returned nodes
 // are invalidated prior to finishing the selector's by, wait, check, and after
 // funcs.
-func (s *Selector) run(ctx context.Context, h *Target) chan error {
+func (s *Selector) run(ctx context.Context, t *Target) chan error {
 	ch := make(chan error, 1)
-	h.waitQueue <- func(cur *cdp.Frame) bool {
+	t.waitQueue <- func() bool {
+		cur := t.cur
 		cur.RLock()
 		root := cur.Root
 		cur.RUnlock()
@@ -85,17 +84,17 @@ func (s *Selector) run(ctx context.Context, h *Target) chan error {
 			return false
 		}
 
-		ids, err := s.by(ctx, h, root)
+		ids, err := s.by(ctx, root)
 		if err != nil || len(ids) < s.exp {
 			return false
 		}
-		nodes, err := s.wait(ctx, h, cur, ids...)
+		nodes, err := s.wait(ctx, cur, ids...)
 		// if nodes==nil, we're not yet ready
 		if nodes == nil || err != nil {
 			return false
 		}
 		if s.after != nil {
-			if err := s.after(ctx, h, nodes...); err != nil {
+			if err := s.after(ctx, nodes...); err != nil {
 				ch <- err
 			}
 		}
@@ -117,7 +116,7 @@ func (s *Selector) selAsString() string {
 // QueryAfter is an action that will match the specified sel using the supplied
 // query options, and after the visibility conditions of the query have been
 // met, will execute f.
-func QueryAfter(sel interface{}, f func(context.Context, *Target, ...*cdp.Node) error, opts ...QueryOption) Action {
+func QueryAfter(sel interface{}, f func(context.Context, ...*cdp.Node) error, opts ...QueryOption) Action {
 	return Query(sel, append(opts, After(f))...)
 }
 
@@ -125,7 +124,7 @@ func QueryAfter(sel interface{}, f func(context.Context, *Target, ...*cdp.Node) 
 type QueryOption func(*Selector)
 
 // ByFunc is a query option to set the func used to select elements.
-func ByFunc(f func(context.Context, *Target, *cdp.Node) ([]cdp.NodeID, error)) QueryOption {
+func ByFunc(f func(context.Context, *cdp.Node) ([]cdp.NodeID, error)) QueryOption {
 	return func(s *Selector) {
 		s.by = f
 	}
@@ -134,8 +133,8 @@ func ByFunc(f func(context.Context, *Target, *cdp.Node) ([]cdp.NodeID, error)) Q
 // ByQuery is a query option to select a single element using
 // DOM.querySelector.
 func ByQuery(s *Selector) {
-	ByFunc(func(ctx context.Context, h *Target, n *cdp.Node) ([]cdp.NodeID, error) {
-		nodeID, err := dom.QuerySelector(n.NodeID, s.selAsString()).Do(ctx, h)
+	ByFunc(func(ctx context.Context, n *cdp.Node) ([]cdp.NodeID, error) {
+		nodeID, err := dom.QuerySelector(n.NodeID, s.selAsString()).Do(ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -150,8 +149,8 @@ func ByQuery(s *Selector) {
 
 // ByQueryAll is a query option to select elements by DOM.querySelectorAll.
 func ByQueryAll(s *Selector) {
-	ByFunc(func(ctx context.Context, h *Target, n *cdp.Node) ([]cdp.NodeID, error) {
-		return dom.QuerySelectorAll(n.NodeID, s.selAsString()).Do(ctx, h)
+	ByFunc(func(ctx context.Context, n *cdp.Node) ([]cdp.NodeID, error) {
+		return dom.QuerySelectorAll(n.NodeID, s.selAsString()).Do(ctx)
 	})(s)
 }
 
@@ -164,8 +163,8 @@ func ByID(s *Selector) {
 // BySearch is a query option via DOM.performSearch (works with both CSS and
 // XPath queries).
 func BySearch(s *Selector) {
-	ByFunc(func(ctx context.Context, h *Target, n *cdp.Node) ([]cdp.NodeID, error) {
-		id, count, err := dom.PerformSearch(s.selAsString()).Do(ctx, h)
+	ByFunc(func(ctx context.Context, n *cdp.Node) ([]cdp.NodeID, error) {
+		id, count, err := dom.PerformSearch(s.selAsString()).Do(ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -174,7 +173,7 @@ func BySearch(s *Selector) {
 			return []cdp.NodeID{}, nil
 		}
 
-		nodes, err := dom.GetSearchResults(id, 0, count).Do(ctx, h)
+		nodes, err := dom.GetSearchResults(id, 0, count).Do(ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -190,9 +189,9 @@ func ByNodeID(s *Selector) {
 		panic("ByNodeID can only work on []cdp.NodeID")
 	}
 
-	ByFunc(func(ctx context.Context, h *Target, n *cdp.Node) ([]cdp.NodeID, error) {
+	ByFunc(func(ctx context.Context, n *cdp.Node) ([]cdp.NodeID, error) {
 		for _, id := range ids {
-			err := dom.RequestChildNodes(id).WithPierce(true).Do(ctx, h)
+			err := dom.RequestChildNodes(id).WithPierce(true).Do(ctx)
 			if err != nil {
 				return nil, err
 			}
@@ -203,9 +202,9 @@ func ByNodeID(s *Selector) {
 }
 
 // waitReady waits for the specified nodes to be ready.
-func (s *Selector) waitReady(check func(context.Context, *Target, *cdp.Node) error) func(context.Context, *Target, *cdp.Frame, ...cdp.NodeID) ([]*cdp.Node, error) {
+func (s *Selector) waitReady(check func(context.Context, *cdp.Node) error) func(context.Context, *cdp.Frame, ...cdp.NodeID) ([]*cdp.Node, error) {
 	errc := make(chan error, 1)
-	return func(ctx context.Context, h *Target, cur *cdp.Frame, ids ...cdp.NodeID) ([]*cdp.Node, error) {
+	return func(ctx context.Context, cur *cdp.Frame, ids ...cdp.NodeID) ([]*cdp.Node, error) {
 		nodes := make([]*cdp.Node, len(ids))
 		cur.RLock()
 		for i, id := range ids {
@@ -219,10 +218,10 @@ func (s *Selector) waitReady(check func(context.Context, *Target, *cdp.Node) err
 		cur.RUnlock()
 
 		if check != nil {
-			for i, n := range nodes {
-				go func(i int, n *cdp.Node) {
-					errc <- check(ctx, h, n)
-				}(i, n)
+			for _, n := range nodes {
+				go func(n *cdp.Node) {
+					errc <- check(ctx, n)
+				}(n)
 			}
 
 			var first error
@@ -242,7 +241,7 @@ func (s *Selector) waitReady(check func(context.Context, *Target, *cdp.Node) err
 }
 
 // WaitFunc is a query option to set a custom wait func.
-func WaitFunc(wait func(context.Context, *Target, *cdp.Frame, ...cdp.NodeID) ([]*cdp.Node, error)) QueryOption {
+func WaitFunc(wait func(context.Context, *cdp.Frame, ...cdp.NodeID) ([]*cdp.Node, error)) QueryOption {
 	return func(s *Selector) {
 		s.wait = wait
 	}
@@ -255,9 +254,9 @@ func NodeReady(s *Selector) {
 
 // NodeVisible is a query option to wait until the element is visible.
 func NodeVisible(s *Selector) {
-	WaitFunc(s.waitReady(func(ctx context.Context, h *Target, n *cdp.Node) error {
+	WaitFunc(s.waitReady(func(ctx context.Context, n *cdp.Node) error {
 		// check box model
-		_, err := dom.GetBoxModel().WithNodeID(n.NodeID).Do(ctx, h)
+		_, err := dom.GetBoxModel().WithNodeID(n.NodeID).Do(ctx)
 		if err != nil {
 			if isCouldNotComputeBoxModelError(err) {
 				return ErrNotVisible
@@ -268,7 +267,7 @@ func NodeVisible(s *Selector) {
 
 		// check offsetParent
 		var res bool
-		err = EvaluateAsDevTools(fmt.Sprintf(visibleJS, n.FullXPath()), &res).Do(ctx, h)
+		err = EvaluateAsDevTools(fmt.Sprintf(visibleJS, n.FullXPath()), &res).Do(ctx)
 		if err != nil {
 			return err
 		}
@@ -281,9 +280,9 @@ func NodeVisible(s *Selector) {
 
 // NodeNotVisible is a query option to wait until the element is not visible.
 func NodeNotVisible(s *Selector) {
-	WaitFunc(s.waitReady(func(ctx context.Context, h *Target, n *cdp.Node) error {
+	WaitFunc(s.waitReady(func(ctx context.Context, n *cdp.Node) error {
 		// check box model
-		_, err := dom.GetBoxModel().WithNodeID(n.NodeID).Do(ctx, h)
+		_, err := dom.GetBoxModel().WithNodeID(n.NodeID).Do(ctx)
 		if err != nil {
 			if isCouldNotComputeBoxModelError(err) {
 				return nil
@@ -294,7 +293,7 @@ func NodeNotVisible(s *Selector) {
 
 		// check offsetParent
 		var res bool
-		err = EvaluateAsDevTools(fmt.Sprintf(visibleJS, n.FullXPath()), &res).Do(ctx, h)
+		err = EvaluateAsDevTools(fmt.Sprintf(visibleJS, n.FullXPath()), &res).Do(ctx)
 		if err != nil {
 			return err
 		}
@@ -307,7 +306,7 @@ func NodeNotVisible(s *Selector) {
 
 // NodeEnabled is a query option to wait until the element is enabled.
 func NodeEnabled(s *Selector) {
-	WaitFunc(s.waitReady(func(ctx context.Context, h *Target, n *cdp.Node) error {
+	WaitFunc(s.waitReady(func(ctx context.Context, n *cdp.Node) error {
 		n.RLock()
 		defer n.RUnlock()
 
@@ -323,7 +322,7 @@ func NodeEnabled(s *Selector) {
 
 // NodeSelected is a query option to wait until the element is selected.
 func NodeSelected(s *Selector) {
-	WaitFunc(s.waitReady(func(ctx context.Context, h *Target, n *cdp.Node) error {
+	WaitFunc(s.waitReady(func(ctx context.Context, n *cdp.Node) error {
 		n.RLock()
 		defer n.RUnlock()
 
@@ -341,7 +340,7 @@ func NodeSelected(s *Selector) {
 // matching the selector.
 func NodeNotPresent(s *Selector) {
 	s.exp = 0
-	WaitFunc(func(ctx context.Context, h *Target, cur *cdp.Frame, ids ...cdp.NodeID) ([]*cdp.Node, error) {
+	WaitFunc(func(ctx context.Context, cur *cdp.Frame, ids ...cdp.NodeID) ([]*cdp.Node, error) {
 		if len(ids) != 0 {
 			return nil, ErrHasResults
 		}
@@ -359,7 +358,7 @@ func AtLeast(n int) QueryOption {
 
 // After is a query option to set a func that will be executed after the wait
 // has succeeded.
-func After(f func(context.Context, *Target, ...*cdp.Node) error) QueryOption {
+func After(f func(context.Context, ...*cdp.Node) error) QueryOption {
 	return func(s *Selector) {
 		s.after = f
 	}

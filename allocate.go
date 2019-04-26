@@ -110,6 +110,12 @@ func (a *ExecAllocator) Allocate(ctx context.Context, opts ...BrowserOption) (*B
 		dataDir = tempDir
 		removeDir = true
 	}
+	if _, ok := a.initFlags["no-sandbox"]; !ok && os.Getuid() == 0 {
+		// Running as root, for example in a Linux container. Chrome
+		// needs --no-sandbox when running as root, so make that the
+		// default, unless the user set Flag("no-sandbox", false).
+		args = append(args, "--no-sandbox")
+	}
 	args = append(args, "--remote-debugging-port=0")
 
 	// Force the first page to be blank, instead of the welcome page;
@@ -118,8 +124,19 @@ func (a *ExecAllocator) Allocate(ctx context.Context, opts ...BrowserOption) (*B
 
 	cmd := exec.CommandContext(ctx, a.execPath, args...)
 
-	a.wg.Add(1) // for the entire allocator
-	c.wg.Add(1) // for this browser's root context
+	// We must start the cmd before calling cmd.Wait, as otherwise the two
+	// can run into a data race.
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return nil, err
+	}
+	defer stderr.Close()
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+
+	c.allocated.Lock() // for this browser's root context
+	a.wg.Add(1)        // for the entire allocator
 	go func() {
 		<-ctx.Done()
 		// First wait for the process to be finished.
@@ -134,17 +151,9 @@ func (a *ExecAllocator) Allocate(ctx context.Context, opts ...BrowserOption) (*B
 			}
 		}
 		a.wg.Done()
-		c.wg.Done()
+		c.allocated.Unlock()
 	}()
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		return nil, err
-	}
-	defer stderr.Close()
-	if err := cmd.Start(); err != nil {
-		return nil, err
-	}
-	wsURL, err := portFromStderr(stderr)
+	wsURL, err := addrFromStderr(stderr)
 	if err != nil {
 		return nil, err
 	}
@@ -164,24 +173,31 @@ func (a *ExecAllocator) Allocate(ctx context.Context, opts ...BrowserOption) (*B
 	return browser, nil
 }
 
-// portFromStderr finds the free port that Chrome selected for the debugging
+// addrFromStderr finds the free port that Chrome selected for the debugging
 // protocol. This should be hooked up to a new Chrome process's Stderr pipe
 // right after it is started.
-func portFromStderr(rc io.ReadCloser) (string, error) {
+func addrFromStderr(rc io.ReadCloser) (string, error) {
+	defer rc.Close()
 	url := ""
 	scanner := bufio.NewScanner(rc)
 	prefix := "DevTools listening on"
+
+	var lines []string
 	for scanner.Scan() {
 		line := scanner.Text()
 		if s := strings.TrimPrefix(line, prefix); s != line {
 			url = strings.TrimSpace(s)
 			break
 		}
+		lines = append(lines, line)
 	}
 	if err := scanner.Err(); err != nil {
 		return "", err
 	}
-	rc.Close()
+	if url == "" {
+		return "", fmt.Errorf("chrome stopped too early; stderr:\n%s",
+			strings.Join(lines, "\n"))
+	}
 	return url, nil
 }
 

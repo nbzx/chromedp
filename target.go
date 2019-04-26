@@ -2,7 +2,6 @@ package chromedp
 
 import (
 	"context"
-	"encoding/json"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -23,7 +22,7 @@ type Target struct {
 	SessionID target.SessionID
 	TargetID  target.ID
 
-	waitQueue  chan func(cur *cdp.Frame) bool
+	waitQueue  chan func() bool
 	eventQueue chan *cdproto.Message
 
 	// below are the old TargetHandler fields.
@@ -55,7 +54,7 @@ func (t *Target) run(ctx context.Context) {
 		}
 		for i := 0; i < n; i++ {
 			fn := <-t.waitQueue
-			if !fn(t.cur) {
+			if !fn() {
 				// try again later.
 				t.waitQueue <- fn
 			}
@@ -80,11 +79,11 @@ func (t *Target) run(ctx context.Context) {
 	}
 }
 
-func (t *Target) Execute(ctx context.Context, method string, params json.Marshaler, res json.Unmarshaler) error {
+func (t *Target) Execute(ctx context.Context, method string, params easyjson.Marshaler, res easyjson.Unmarshaler) error {
 	paramsMsg := emptyObj
 	if params != nil {
 		var err error
-		if paramsMsg, err = json.Marshal(params); err != nil {
+		if paramsMsg, err = easyjson.Marshal(params); err != nil {
 			return err
 		}
 	}
@@ -123,7 +122,7 @@ func (t *Target) Execute(ctx context.Context, method string, params json.Marshal
 		case msg.Error != nil:
 			return msg.Error
 		case res != nil:
-			return json.Unmarshal(msg.Result, res)
+			return easyjson.Unmarshal(msg.Result, res)
 		}
 	case <-ctx.Done():
 		return ctx.Err()
@@ -185,7 +184,7 @@ func (t *Target) documentUpdated(ctx context.Context) {
 
 	f.Nodes = make(map[cdp.NodeID]*cdp.Node)
 	var err error
-	f.Root, err = dom.GetDocument().WithPierce(true).Do(ctx, t)
+	f.Root, err = dom.GetDocument().WithPierce(true).Do(cdp.WithExecutor(ctx, t))
 	if err == context.Canceled {
 		return // TODO: perhaps not necessary, but useful to keep the tests less noisy
 	}
@@ -208,7 +207,11 @@ func (t *Target) pageEvent(ev interface{}) {
 	switch e := ev.(type) {
 	case *page.EventFrameNavigated:
 		t.frames[e.Frame.ID] = e.Frame
-		t.cur = e.Frame
+		if e.Frame.ParentID == "" {
+			// This frame is only the new top-level frame if it has
+			// no parent.
+			t.cur = e.Frame
+		}
 		return
 
 	case *page.EventFrameAttached:

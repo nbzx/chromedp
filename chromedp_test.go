@@ -8,6 +8,7 @@ import (
 	"path"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nbzx/cdproto/target"
 )
@@ -43,6 +44,16 @@ func testAllocate(tb testing.TB, path string) (_ context.Context, cancel func())
 }
 
 func TestMain(m *testing.M) {
+	if task := os.Getenv("CHROMEDP_TEST_TASK"); task != "" {
+		// The test binary is re-used to run standalone tasks, such as
+		// allocating a browser within a Docker container.
+		if err := runTask(task); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+
 	wd, err := os.Getwd()
 	if err != nil {
 		panic(fmt.Sprintf("could not get working directory: %v", err))
@@ -87,6 +98,51 @@ func TestMain(m *testing.M) {
 
 	cancel()
 	os.Exit(code)
+}
+
+func runTask(name string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	switch name {
+	case "ExecAllocator_Allocate":
+		ctx, cancel := NewContext(ctx)
+		defer cancel()
+		if err := Run(ctx); err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("unknown test binary task: %q", name)
+	}
+	return nil
+}
+
+func BenchmarkTabNavigate(b *testing.B) {
+	b.ReportAllocs()
+
+	allocCtx, cancel := NewExecAllocator(context.Background(), allocOpts...)
+	defer cancel()
+
+	// start the browser
+	bctx, _ := NewContext(allocCtx)
+	if err := Run(bctx); err != nil {
+		b.Fatal(err)
+	}
+
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			ctx, _ := NewContext(bctx)
+			if err := Run(ctx,
+				Navigate(testdataDir+"/form.html"),
+				WaitVisible(`#form`, ByID), // for form.html
+			); err != nil {
+				b.Fatal(err)
+			}
+			if err := Cancel(ctx); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
 }
 
 // checkPages fatals if the browser behind the chromedp context has an
@@ -198,9 +254,43 @@ func TestPrematureCancelTab(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	ctx2, cancel := NewContext(ctx1)
 	// Cancel after the browser is allocated, but before we've created a new
 	// tab.
-	ctx2, cancel := NewContext(ctx1)
 	cancel()
-	Run(ctx2)
+	if err := Run(ctx2); err != context.Canceled {
+		t.Fatalf("wanted canceled context error, got %v", err)
+	}
+}
+
+func TestPrematureCancelAllocator(t *testing.T) {
+	t.Parallel()
+
+	// To ensure we don't actually fire any Chrome processes.
+	allocCtx, cancel := NewExecAllocator(context.Background(),
+		ExecPath("/do-not-run-chrome"))
+	// Cancel before the browser is allocated.
+	cancel()
+
+	ctx, cancel := NewContext(allocCtx)
+	defer cancel()
+	if err := Run(ctx); err != context.Canceled {
+		t.Fatalf("wanted canceled context error, got %v", err)
+	}
+}
+
+func TestConcurrentCancel(t *testing.T) {
+	t.Parallel()
+
+	// To ensure we don't actually fire any Chrome processes.
+	allocCtx, cancel := NewExecAllocator(context.Background(),
+		ExecPath("/do-not-run-chrome"))
+	defer cancel()
+
+	// 50 is enough for 'go test -race' to easily spot issues.
+	for i := 0; i < 50; i++ {
+		ctx, cancel := NewContext(allocCtx)
+		go cancel()
+		go Run(ctx)
+	}
 }

@@ -1,22 +1,19 @@
-# About chromedp [![Build Status][1]][2] [![Coverage Status][3]][4]
+# About chromedp [![GoDoc][1]][2] [![Build Status][3]][4]
 
 Package chromedp is a faster, simpler way to drive browsers supporting the
 [Chrome DevTools Protocol][5] in Go using the without external dependencies
-(ie, Selenium, PhantomJS, etc).
+(like Selenium or PhantomJS).
 
 ## Installing
 
 Install in the usual Go way:
 
-```sh
-go get -u github.com/chromedp/chromedp
-```
+	go get -u github.com/chromedp/chromedp
 
 ## Examples
 
-Please see the [examples][6] project for more examples. Please refer to the
-[GoDoc API listing][7] for a summary of the API and Actions, which also contains
-a few simple and runnable examples.
+Refer to the [GoDoc page][7] for the documentation and examples. The
+[examples][6] repository contains more complex scenarios.
 
 ## Resources
 
@@ -27,17 +24,10 @@ a few simple and runnable examples.
 * [`github.com/chromedp/cdproto-gen`][10] - tool used to generate `cdproto`
 * [`github.com/chromedp/chromedp-proxy`][11] - a simple CDP proxy for logging CDP clients and browsers
 
-## TODO
-
-* Implement more query selector options (allow over riding context timeouts)
-* Contextual actions for "dry run" (or via an accumulator?)
-* Network loader / manager
-* Profiler
-
-[1]: https://travis-ci.org/chromedp/chromedp.svg
-[2]: https://travis-ci.org/chromedp/chromedp
-[3]: https://coveralls.io/repos/chromedp/chromedp/badge.svg?branch=master&service=github
-[4]: https://coveralls.io/github/chromedp/chromedp?branch=master
+[1]: https://godoc.org/github.com/chromedp/chromedp?status.svg
+[2]: https://godoc.org/github.com/chromedp/chromedp
+[3]: https://travis-ci.org/chromedp/chromedp.svg
+[4]: https://travis-ci.org/chromedp/chromedp
 [5]: https://chromedevtools.github.io/devtools-protocol/
 [6]: https://github.com/chromedp/examples
 [7]: https://godoc.org/github.com/chromedp/chromedp
