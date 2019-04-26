@@ -188,7 +188,7 @@ func Shutdown(ctx context.Context) error {
 func Wait(ctx context.Context) {
 	c := FromContext(ctx)
 	if c != nil {
-		c.wg.Wait()
+		c.closedTarget.Wait()
 	}
 }
 
