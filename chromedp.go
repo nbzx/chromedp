@@ -192,6 +192,34 @@ func Wait(ctx context.Context) {
 	}
 }
 
+//监控js错误事件
+func ErrorEvent(ctx context.Context, f func(*runtime.EventConsoleAPICalled)) {
+	c := FromContext(ctx)
+	if c == nil || c.Allocator == nil || c.cancel == nil {
+		return
+	}
+	if c.Browser == nil {
+		browser, err := c.Allocator.Allocate(ctx, c.browserOpts...)
+		if err != nil {
+			return
+		}
+		c.Browser = browser
+	}
+	if c.Target == nil {
+		if err := c.newSession(ctx); err != nil {
+			return
+		}
+	}
+	go func() {
+		for{
+			select {
+			case error := <- c.Target.errorQueue:
+				f(error)
+			}
+		}
+	}()
+}
+
 // Run runs an action against context. The provided context must be a valid
 // chromedp context, typically created via NewContext.
 func Run(ctx context.Context, actions ...Action) error {

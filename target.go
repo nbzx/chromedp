@@ -11,6 +11,7 @@ import (
 	"github.com/nbzx/cdproto"
 	"github.com/nbzx/cdproto/cdp"
 	"github.com/nbzx/cdproto/dom"
+	"github.com/nbzx/cdproto/runtime"
 	"github.com/nbzx/cdproto/inspector"
 	"github.com/nbzx/cdproto/page"
 	"github.com/nbzx/cdproto/target"
@@ -24,6 +25,8 @@ type Target struct {
 
 	waitQueue  chan func() bool
 	eventQueue chan *cdproto.Message
+	//js错误队列
+	errorQueue chan *runtime.EventConsoleAPICalled
 
 	// below are the old TargetHandler fields.
 
@@ -163,6 +166,8 @@ func (t *Target) processEvent(ctx context.Context, msg *cdproto.Message) error {
 		t.pageEvent(ev)
 	case "DOM":
 		t.domEvent(ev)
+	case "Runtime":
+		t.runtimeEvent(ev)
 	}
 	return nil
 }
@@ -328,6 +333,15 @@ func (t *Target) domEvent(ev interface{}) {
 	defer f.Unlock()
 
 	op(n)
+}
+
+func (t *Target) runtimeEvent(ev interface{}) {
+	switch e := ev.(type) {
+	case *runtime.EventConsoleAPICalled:
+		if e.Type == "error" {
+			t.errorQueue <- e
+		}
+	}
 }
 
 type TargetOption func(*Target)
