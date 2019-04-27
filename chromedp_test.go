@@ -8,8 +8,9 @@ import (
 	"path"
 	"strings"
 	"testing"
-	"time"
 
+	"github.com/nbzx/cdproto/dom"
+	"github.com/nbzx/cdproto/page"
 	"github.com/nbzx/cdproto/target"
 )
 
@@ -23,7 +24,7 @@ var (
 	allocOpts []ExecAllocatorOption
 )
 
-func testAllocate(tb testing.TB, path string) (_ context.Context, cancel func()) {
+func testAllocate(tb testing.TB, path string) (context.Context, context.CancelFunc) {
 	// Same browser, new tab; not needing to start new chrome browsers for
 	// each test gives a huge speed-up.
 	ctx, _ := NewContext(browserCtx)
@@ -35,25 +36,15 @@ func testAllocate(tb testing.TB, path string) (_ context.Context, cancel func())
 		}
 	}
 
-	cancelErr := func() {
+	cancel := func() {
 		if err := Cancel(ctx); err != nil {
 			tb.Error(err)
 		}
 	}
-	return ctx, cancelErr
+	return ctx, cancel
 }
 
 func TestMain(m *testing.M) {
-	if task := os.Getenv("CHROMEDP_TEST_TASK"); task != "" {
-		// The test binary is re-used to run standalone tasks, such as
-		// allocating a browser within a Docker container.
-		if err := runTask(task); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
-		os.Exit(0)
-	}
-
 	wd, err := os.Getwd()
 	if err != nil {
 		panic(fmt.Sprintf("could not get working directory: %v", err))
@@ -98,23 +89,6 @@ func TestMain(m *testing.M) {
 
 	cancel()
 	os.Exit(code)
-}
-
-func runTask(name string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	switch name {
-	case "ExecAllocator_Allocate":
-		ctx, cancel := NewContext(ctx)
-		defer cancel()
-		if err := Run(ctx); err != nil {
-			return err
-		}
-	default:
-		return fmt.Errorf("unknown test binary task: %q", name)
-	}
-	return nil
 }
 
 func BenchmarkTabNavigate(b *testing.B) {
@@ -292,5 +266,73 @@ func TestConcurrentCancel(t *testing.T) {
 		ctx, cancel := NewContext(allocCtx)
 		go cancel()
 		go Run(ctx)
+	}
+}
+
+func TestListenBrowser(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := NewContext(context.Background())
+	defer cancel()
+
+	// Check that many ListenBrowser callbacks work.
+	var attachedCount, totalCount int
+	ListenBrowser(ctx, func(v interface{}) error {
+		if _, ok := v.(*target.EventAttachedToTarget); ok {
+			attachedCount++
+		}
+		return nil
+	})
+	ListenBrowser(ctx, func(v interface{}) error {
+		totalCount++
+		return nil
+	})
+
+	if err := Run(ctx,
+		Navigate(testdataDir+"/form.html"),
+		WaitVisible(`#form`, ByID), // for form.html
+	); err != nil {
+		t.Fatal(err)
+	}
+	if want := 1; attachedCount != want {
+		t.Fatalf("want %d Page.frameNavigated events; got %d", want, attachedCount)
+	}
+	if want := 1; totalCount < want {
+		t.Fatalf("want at least %d DOM.documentUpdated events; got %d", want, totalCount)
+	}
+}
+
+func TestListenTarget(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := testAllocate(t, "")
+	defer cancel()
+
+	// Check that many ListenTarget callbacks work.
+	var navigatedCount, updatedCount int
+	ListenTarget(ctx, func(v interface{}) error {
+		if _, ok := v.(*page.EventFrameNavigated); ok {
+			navigatedCount++
+		}
+		return nil
+	})
+	ListenTarget(ctx, func(v interface{}) error {
+		if _, ok := v.(*dom.EventDocumentUpdated); ok {
+			updatedCount++
+		}
+		return nil
+	})
+
+	if err := Run(ctx,
+		Navigate(testdataDir+"/form.html"),
+		WaitVisible(`#form`, ByID), // for form.html
+	); err != nil {
+		t.Fatal(err)
+	}
+	if want := 1; navigatedCount != want {
+		t.Fatalf("want %d Page.frameNavigated events; got %d", want, navigatedCount)
+	}
+	if want := 1; updatedCount < want {
+		t.Fatalf("want at least %d DOM.documentUpdated events; got %d", want, updatedCount)
 	}
 }

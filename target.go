@@ -23,6 +23,8 @@ type Target struct {
 	SessionID target.SessionID
 	TargetID  target.ID
 
+	listeners []func(v interface{}) error
+
 	waitQueue  chan func() bool
 	eventQueue chan *cdproto.Message
 	//js错误队列
@@ -151,6 +153,13 @@ func (t *Target) processEvent(ctx context.Context, msg *cdproto.Message) error {
 			return nil
 		}
 		return err
+	}
+
+	for _, fn := range t.listeners {
+		if err := fn(ev); err != nil {
+			// TODO: allow for custom logic here.
+			return err
+		}
 	}
 
 	switch ev.(type) {
