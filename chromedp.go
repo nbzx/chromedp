@@ -21,6 +21,7 @@ import (
 	"github.com/nbzx/cdproto/page"
 	"github.com/nbzx/cdproto/runtime"
 	"github.com/nbzx/cdproto/target"
+	"github.com/nbzx/cdproto/network"
 )
 
 // Context is attached to any context.Context which is valid for use with Run.
@@ -302,6 +303,7 @@ func (c *Context) newSession(ctx context.Context) error {
 	for _, enable := range []Action{
 		log.Enable(),
 		runtime.Enable(),
+		network.Enable(),
 		inspector.Enable(),
 		page.Enable(),
 		dom.Enable(),
