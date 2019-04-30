@@ -161,8 +161,6 @@ func (t *Target) Execute(ctx context.Context, method string, params easyjson.Mar
 		case res != nil:
 			return easyjson.Unmarshal(msg.Result, res)
 		}
-	case "Runtime":
-		t.runtimeEvent(ev)
 	}
 	return nil
 }
@@ -333,15 +331,6 @@ func (t *Target) domEvent(ctx context.Context, ev interface{}) {
 	f.Lock()
 	op(n)
 	f.Unlock()
-}
-
-func (t *Target) runtimeEvent(ev interface{}) {
-	switch e := ev.(type) {
-	case *runtime.EventConsoleAPICalled:
-		if e.Type == "error" {
-			t.errorQueue <- e
-		}
-	}
 }
 
 type TargetOption func(*Target)

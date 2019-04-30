@@ -155,7 +155,6 @@ func (b *Browser) newExecutorForTarget(ctx context.Context, targetID target.ID, 
 
 		eventQueue: make(chan *cdproto.Message, 1024),
 		waitQueue:  make(chan func() bool, 1024),
-		errorQueue: make(chan *runtime.EventConsoleAPICalled, 1024),
 		frames:     make(map[cdp.FrameID]*cdp.Frame),
 
 		logf: b.logf,
