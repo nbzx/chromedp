@@ -237,8 +237,6 @@ func (t *Target) pageEvent(ev interface{}) {
 		return
 	case *page.EventJavascriptDialogOpening:
 		return
-	case *page.EventJavascriptDialogOpening:
-		return
 	case *page.EventJavascriptDialogClosed:
 		return
 
