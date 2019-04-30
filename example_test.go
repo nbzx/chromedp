@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	cdpruntime "github.com/nbzx/cdproto/runtime"
+	"github.com/nbzx/chromedp"
 )
 
 func writeHTML(content string) http.Handler {

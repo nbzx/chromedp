@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chromedp/cdproto/target"
+	"github.com/nbzx/cdproto/target"
 )
 
 func TestExecAllocator(t *testing.T) {
@@ -27,7 +27,7 @@ func TestExecAllocator(t *testing.T) {
 	taskCtx, cancel := NewContext(allocCtx)
 	defer cancel()
 
-	want := "insert"
+	want := "insertkeyword"
 	var got string
 	if err := Run(taskCtx,
 		Navigate(testdataDir+"/form.html"),
@@ -185,7 +185,7 @@ func TestRemoteAllocator(t *testing.T) {
 			}
 		}
 
-		want := "insert"
+		want := "insertkeyword"
 		var got string
 		if err := Run(taskCtx,
 			Navigate(testdataDir+"/form.html"),
