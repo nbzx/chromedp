@@ -2,7 +2,6 @@ package chromedp
 
 import (
 	"context"
-	"strings"
 	"sync/atomic"
 	"time"
 
@@ -23,14 +22,10 @@ type Target struct {
 	SessionID target.SessionID
 	TargetID  target.ID
 
-	listeners []func(v interface{}) error
+	listeners []func(ev interface{})
 
 	waitQueue  chan func() bool
 	eventQueue chan *cdproto.Message
-	//js错误队列
-	errorQueue chan *runtime.EventConsoleAPICalled
-
-	// below are the old TargetHandler fields.
 
 	// frames is the set of encountered frames.
 	frames map[cdp.FrameID]*cdp.Frame
@@ -66,20 +61,55 @@ func (t *Target) run(ctx context.Context) {
 		}
 	}
 
+	type eventValue struct {
+		method cdproto.MethodType
+		value  interface{}
+	}
+	// syncEventQueue is used to handle events synchronously within Target.
+	syncEventQueue := make(chan eventValue, 1024)
+
+	// This goroutine receives events from the browser, calls listeners, and
+	// then passes the events onto the main goroutine for the target handler
+	// to update itself.
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case msg := <-t.eventQueue:
+				ev, err := cdproto.UnmarshalMessage(msg)
+				if err != nil {
+					if _, ok := err.(cdp.ErrUnknownCommandOrEvent); ok {
+						// This is most likely an event received from an older
+						// Chrome which a newer cdproto doesn't have, as it is
+						// deprecated. Ignore that error.
+						continue
+					}
+					t.errf("could not unmarshal event: %v", err)
+					continue
+				}
+				for _, fn := range t.listeners {
+					fn(ev)
+				}
+				syncEventQueue <- eventValue{msg.Method, ev}
+			}
+		}
+	}()
+
 	for {
 		select {
-		case msg := <-t.eventQueue:
-			if err := t.processEvent(ctx, msg); err != nil {
-				t.errf("could not process event: %v", err)
-				continue
-			}
-			if msg.Method.Domain() == "DOM" {
+		case <-ctx.Done():
+			return
+		case ev := <-syncEventQueue:
+			switch ev.method.Domain() {
+			case "Page":
+				t.pageEvent(ev.value)
+			case "DOM":
+				t.domEvent(ctx, ev.value)
 				tryWaits()
 			}
 		case <-t.tick:
 			tryWaits()
-		case <-ctx.Done():
-			return
 		}
 	}
 }
@@ -120,6 +150,8 @@ func (t *Target) Execute(ctx context.Context, method string, params easyjson.Mar
 	}
 
 	select {
+	case <-ctx.Done():
+		return ctx.Err()
 	case msg := <-ch:
 		switch {
 		case msg == nil:
@@ -129,52 +161,6 @@ func (t *Target) Execute(ctx context.Context, method string, params easyjson.Mar
 		case res != nil:
 			return easyjson.Unmarshal(msg.Result, res)
 		}
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-	return nil
-}
-
-// below are the old TargetHandler methods.
-
-// processEvent processes an incoming event.
-func (t *Target) processEvent(ctx context.Context, msg *cdproto.Message) error {
-	if msg == nil {
-		return ErrChannelClosed
-	}
-	// unmarshal
-	ev, err := cdproto.UnmarshalMessage(msg)
-	if err != nil {
-		if strings.Contains(err.Error(), "unknown command or event") {
-			// This is most likely an event received from an older
-			// Chrome which a newer cdproto doesn't have, as it is
-			// deprecated. Ignore that error.
-			// TODO: use error wrapping once Go 1.13 is released.
-			return nil
-		}
-		return err
-	}
-
-	for _, fn := range t.listeners {
-		if err := fn(ev); err != nil {
-			// TODO: allow for custom logic here.
-			return err
-		}
-	}
-
-	switch ev.(type) {
-	case *inspector.EventDetached:
-		return nil
-	case *dom.EventDocumentUpdated:
-		t.documentUpdated(ctx)
-		return nil
-	}
-
-	switch msg.Method.Domain() {
-	case "Page":
-		t.pageEvent(ev)
-	case "DOM":
-		t.domEvent(ev)
 	case "Runtime":
 		t.runtimeEvent(ev)
 	}
@@ -255,6 +241,10 @@ func (t *Target) pageEvent(ev interface{}) {
 		return
 	case *page.EventJavascriptDialogOpening:
 		return
+	case *page.EventJavascriptDialogOpening:
+		return
+	case *page.EventJavascriptDialogClosed:
+		return
 
 	default:
 		t.errf("unhandled page event %T", ev)
@@ -271,19 +261,21 @@ func (t *Target) pageEvent(ev interface{}) {
 	}
 
 	f.Lock()
-	defer f.Unlock()
-
 	op(f)
+	f.Unlock()
 }
 
 // domEvent handles incoming DOM events.
-func (t *Target) domEvent(ev interface{}) {
+func (t *Target) domEvent(ctx context.Context, ev interface{}) {
 	f := t.cur
-
 	var id cdp.NodeID
 	var op nodeOp
 
 	switch e := ev.(type) {
+	case *dom.EventDocumentUpdated:
+		t.documentUpdated(ctx)
+		return
+
 	case *dom.EventSetChildNodes:
 		id, op = e.ParentID, setChildNodes(f.Nodes, e.Nodes)
 
@@ -339,9 +331,8 @@ func (t *Target) domEvent(ev interface{}) {
 	}
 
 	f.Lock()
-	defer f.Unlock()
-
 	op(n)
+	f.Unlock()
 }
 
 func (t *Target) runtimeEvent(ev interface{}) {

@@ -30,7 +30,7 @@ type Browser struct {
 	// cancelled (and the handler stopped) once the connection has failed.
 	LostConnection chan struct{}
 
-	listeners []func(v interface{}) error
+	listeners []func(ev interface{})
 
 	conn Transport
 
@@ -190,6 +190,8 @@ func (b *Browser) Execute(ctx context.Context, method string, params easyjson.Ma
 		resp: ch,
 	}
 	select {
+	case <-ctx.Done():
+		return ctx.Err()
 	case msg := <-ch:
 		switch {
 		case msg == nil:
@@ -199,8 +201,6 @@ func (b *Browser) Execute(ctx context.Context, method string, params easyjson.Ma
 		case res != nil:
 			return easyjson.Unmarshal(msg.Result, res)
 		}
-	case <-ctx.Done():
-		return ctx.Err()
 	}
 	return nil
 }
@@ -293,11 +293,7 @@ func (b *Browser) run(ctx context.Context) {
 						continue
 					}
 					for _, fn := range b.listeners {
-						if err := fn(ev); err != nil {
-							// TODO: allow for custom logic here.
-							b.errf("%s", err)
-							continue
-						}
+						fn(ev)
 					}
 					switch ev := ev.(type) {
 					case *target.EventDetachedFromTarget:
@@ -333,6 +329,8 @@ func (b *Browser) run(ctx context.Context) {
 		pages := make(map[target.SessionID]*Target, 32)
 		for {
 			select {
+			case <-ctx.Done():
+				return
 			case t := <-b.newTabQueue:
 				if _, ok := pages[t.SessionID]; ok {
 					b.errf("executor for %q already exists", t.SessionID)
@@ -345,11 +343,7 @@ func (b *Browser) run(ctx context.Context) {
 					b.errf("unknown session ID %q", event.sessionID)
 					continue
 				}
-				select {
-				case page.eventQueue <- event.msg:
-				default:
-					panic("eventQueue is full")
-				}
+				page.eventQueue <- event.msg
 
 			case sessionID := <-b.delTabQueue:
 				if _, ok := pages[sessionID]; !ok {
@@ -371,8 +365,6 @@ func (b *Browser) run(ctx context.Context) {
 					}
 				}
 
-			case <-ctx.Done():
-				return
 			}
 		}
 	}()
@@ -383,6 +375,8 @@ func (b *Browser) run(ctx context.Context) {
 	// responses back for each of these commands via respByID.
 	for {
 		select {
+		case <-ctx.Done():
+			return
 		case res := <-resQueue:
 			resp, ok := respByID[res.ID]
 			if !ok {
@@ -416,8 +410,6 @@ func (b *Browser) run(ctx context.Context) {
 
 		case <-b.LostConnection:
 			return // to avoid "write: broken pipe" errors
-		case <-ctx.Done():
-			return
 		}
 	}
 }

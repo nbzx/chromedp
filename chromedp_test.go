@@ -3,53 +3,45 @@ package chromedp
 import (
 	"context"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"os"
 	"path"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/nbzx/cdproto/dom"
 	"github.com/nbzx/cdproto/page"
+	cdpruntime "github.com/nbzx/cdproto/runtime"
 	"github.com/nbzx/cdproto/target"
 )
 
 var (
+	// these are set up in init
 	execPath    string
 	testdataDir string
+	allocOpts   []ExecAllocatorOption
 
+	// allocCtx is initialised in TestMain, to cancel before exiting.
+	allocCtx context.Context
+
+	// browserCtx is initialised with allocateOnce
 	browserCtx context.Context
-
-	// allocOpts is filled in TestMain
-	allocOpts []ExecAllocatorOption
 )
 
-func testAllocate(tb testing.TB, path string) (context.Context, context.CancelFunc) {
-	// Same browser, new tab; not needing to start new chrome browsers for
-	// each test gives a huge speed-up.
-	ctx, _ := NewContext(browserCtx)
-
-	// Only navigate if we want a path, otherwise leave the blank page.
-	if path != "" {
-		if err := Run(ctx, Navigate(testdataDir+"/"+path)); err != nil {
-			tb.Fatal(err)
-		}
-	}
-
-	cancel := func() {
-		if err := Cancel(ctx); err != nil {
-			tb.Error(err)
-		}
-	}
-	return ctx, cancel
-}
-
-func TestMain(m *testing.M) {
+func init() {
 	wd, err := os.Getwd()
 	if err != nil {
 		panic(fmt.Sprintf("could not get working directory: %v", err))
 	}
 	testdataDir = "file://" + path.Join(wd, "testdata")
+
+	allocTempDir, err = ioutil.TempDir("", "chromedp-test")
+	if err != nil {
+		panic(fmt.Sprintf("could not create temp directory: %v", err))
+	}
 
 	// build on top of the default options
 	allocOpts = append(allocOpts, DefaultExecAllocatorOptions...)
@@ -71,24 +63,71 @@ func TestMain(m *testing.M) {
 	if noSandbox := os.Getenv("CHROMEDP_NO_SANDBOX"); noSandbox != "false" {
 		allocOpts = append(allocOpts, NoSandbox)
 	}
+}
 
-	allocCtx, cancel := NewExecAllocator(context.Background(), allocOpts...)
-
-	var browserOpts []ContextOption
-	if debug := os.Getenv("CHROMEDP_DEBUG"); debug != "" && debug != "false" {
-		browserOpts = append(browserOpts, WithDebugf(log.Printf))
-	}
-
-	// start the browser
-	browserCtx, _ = NewContext(allocCtx, browserOpts...)
-	if err := Run(browserCtx); err != nil {
-		panic(err)
-	}
+func TestMain(m *testing.M) {
+	var cancel context.CancelFunc
+	allocCtx, cancel = NewExecAllocator(context.Background(), allocOpts...)
 
 	code := m.Run()
-
 	cancel()
+
+	if infos, _ := ioutil.ReadDir(allocTempDir); len(infos) > 0 {
+		os.RemoveAll(allocTempDir)
+		// TODO: panic instead, once we fix the dir leaks
+		// panic(fmt.Sprintf("leaked %d temporary dirs under %s", len(infos), allocTempDir))
+	} else {
+		os.Remove(allocTempDir)
+	}
+
 	os.Exit(code)
+}
+
+var allocateOnce sync.Once
+
+func testAllocate(tb testing.TB, name string) (context.Context, context.CancelFunc) {
+	// Start the browser exactly once, as needed.
+	allocateOnce.Do(func() {
+		var browserOpts []ContextOption
+		if debug := os.Getenv("CHROMEDP_DEBUG"); debug != "" && debug != "false" {
+			browserOpts = append(browserOpts, WithDebugf(log.Printf))
+		}
+
+		// start the browser
+		browserCtx, _ = NewContext(allocCtx, browserOpts...)
+		if err := Run(browserCtx); err != nil {
+			panic(err)
+		}
+	})
+
+	// Same browser, new tab; not needing to start new chrome browsers for
+	// each test gives a huge speed-up.
+	ctx, _ := NewContext(browserCtx)
+
+	// Only navigate if we want an html file name, otherwise leave the blank page.
+	if name != "" {
+		if err := Run(ctx, Navigate(testdataDir+"/"+name)); err != nil {
+			tb.Fatal(err)
+		}
+	}
+
+	cancel := func() {
+		if err := Cancel(ctx); err != nil {
+			tb.Error(err)
+		}
+	}
+	return ctx, cancel
+}
+
+func testAllocateSeparate(tb testing.TB) (context.Context, context.CancelFunc) {
+	// Entirely new browser, unlike testAllocate.
+	ctx, _ := NewContext(allocCtx)
+	cancel := func() {
+		if err := Cancel(ctx); err != nil {
+			tb.Error(err)
+		}
+	}
+	return ctx, cancel
 }
 
 func BenchmarkTabNavigate(b *testing.B) {
@@ -147,7 +186,7 @@ func TestTargets(t *testing.T) {
 	t.Parallel()
 
 	// Start one browser with one tab.
-	ctx1, cancel1 := NewContext(context.Background())
+	ctx1, cancel1 := testAllocateSeparate(t)
 	defer cancel1()
 	if err := Run(ctx1); err != nil {
 		t.Fatal(err)
@@ -180,7 +219,7 @@ func TestTargets(t *testing.T) {
 func TestCancelError(t *testing.T) {
 	t.Parallel()
 
-	ctx1, cancel1 := NewContext(context.Background())
+	ctx1, cancel1 := testAllocateSeparate(t)
 	defer cancel1()
 	if err := Run(ctx1); err != nil {
 		t.Fatal(err)
@@ -212,7 +251,7 @@ func TestPrematureCancel(t *testing.T) {
 	t.Parallel()
 
 	// Cancel before the browser is allocated.
-	ctx, cancel := NewContext(context.Background())
+	ctx, cancel := testAllocateSeparate(t)
 	cancel()
 	if err := Run(ctx); err != context.Canceled {
 		t.Fatalf("wanted canceled context error, got %v", err)
@@ -222,7 +261,7 @@ func TestPrematureCancel(t *testing.T) {
 func TestPrematureCancelTab(t *testing.T) {
 	t.Parallel()
 
-	ctx1, cancel := NewContext(context.Background())
+	ctx1, cancel := testAllocateSeparate(t)
 	defer cancel()
 	if err := Run(ctx1); err != nil {
 		t.Fatal(err)
@@ -272,20 +311,18 @@ func TestConcurrentCancel(t *testing.T) {
 func TestListenBrowser(t *testing.T) {
 	t.Parallel()
 
-	ctx, cancel := NewContext(context.Background())
+	ctx, cancel := testAllocateSeparate(t)
 	defer cancel()
 
 	// Check that many ListenBrowser callbacks work.
 	var attachedCount, totalCount int
-	ListenBrowser(ctx, func(v interface{}) error {
-		if _, ok := v.(*target.EventAttachedToTarget); ok {
+	ListenBrowser(ctx, func(ev interface{}) {
+		if _, ok := ev.(*target.EventAttachedToTarget); ok {
 			attachedCount++
 		}
-		return nil
 	})
-	ListenBrowser(ctx, func(v interface{}) error {
+	ListenBrowser(ctx, func(ev interface{}) {
 		totalCount++
-		return nil
 	})
 
 	if err := Run(ctx,
@@ -310,17 +347,15 @@ func TestListenTarget(t *testing.T) {
 
 	// Check that many ListenTarget callbacks work.
 	var navigatedCount, updatedCount int
-	ListenTarget(ctx, func(v interface{}) error {
-		if _, ok := v.(*page.EventFrameNavigated); ok {
+	ListenTarget(ctx, func(ev interface{}) {
+		if _, ok := ev.(*page.EventFrameNavigated); ok {
 			navigatedCount++
 		}
-		return nil
 	})
-	ListenTarget(ctx, func(v interface{}) error {
-		if _, ok := v.(*dom.EventDocumentUpdated); ok {
+	ListenTarget(ctx, func(ev interface{}) {
+		if _, ok := ev.(*dom.EventDocumentUpdated); ok {
 			updatedCount++
 		}
-		return nil
 	})
 
 	if err := Run(ctx,
@@ -334,5 +369,32 @@ func TestListenTarget(t *testing.T) {
 	}
 	if want := 1; updatedCount < want {
 		t.Fatalf("want at least %d DOM.documentUpdated events; got %d", want, updatedCount)
+	}
+}
+
+func TestLargeEventCount(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := testAllocate(t, "")
+	defer cancel()
+
+	// Simulate an environment where Chrome sends 2000 console log events,
+	// and we are slow at processing them. In older chromedp versions, this
+	// would crash as we would fill eventQueue and panic. 50ms is enough to
+	// make the test fail somewhat reliably on old chromedp versions,
+	// without making the test too slow.
+	first := true
+	ListenTarget(ctx, func(ev interface{}) {
+		if _, ok := ev.(*cdpruntime.EventConsoleAPICalled); ok && first {
+			time.Sleep(50 * time.Millisecond)
+			first = false
+		}
+	})
+
+	if err := Run(ctx,
+		Navigate(testdataDir+"/consolespam.html"),
+		WaitVisible("#done", ByID), // wait for the JS to finish
+	); err != nil {
+		t.Fatal(err)
 	}
 }

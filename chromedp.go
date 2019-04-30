@@ -39,8 +39,8 @@ type Context struct {
 	// have its own unique Target pointing to a separate browser tab (page).
 	Target *Target
 
-	browserListeners []func(v interface{}) error
-	targetListeners  []func(v interface{}) error
+	browserListeners []func(ev interface{})
+	targetListeners  []func(ev interface{})
 
 	// browserOpts holds the browser options passed to NewContext via
 	// WithBrowserOption, so that they can later be used when allocating a
@@ -265,6 +265,8 @@ func Run(ctx context.Context, actions ...Action) error {
 func (c *Context) newSession(ctx context.Context) error {
 	var targetID target.ID
 	if c.first {
+		tries := 0
+	retry:
 		// If we just allocated this browser, and it has a single page
 		// that's blank and not attached, use it.
 		infos, err := target.GetTargets().Do(cdp.WithExecutor(ctx, c.Browser))
@@ -277,6 +279,16 @@ func (c *Context) newSession(ctx context.Context) error {
 				targetID = info.TargetID
 				pages++
 			}
+		}
+		if pages < 1 {
+			// TODO: replace this polling with retries with a wait
+			// via Target.setDiscoverTargets after allocating a new
+			// browser.
+			if tries++; tries < 5 {
+				time.Sleep(10 * time.Millisecond)
+				goto retry
+			}
+			return fmt.Errorf("waited too long for page targets to show up")
 		}
 		if pages > 1 {
 			// Multiple blank pages; just in case, don't use any.
@@ -404,10 +416,10 @@ func Sleep(d time.Duration) Action {
 		// ctx is cancelled before the timer fires.
 		t := time.NewTimer(d)
 		select {
-		case <-t.C:
 		case <-ctx.Done():
 			t.Stop()
 			return ctx.Err()
+		case <-t.C:
 		}
 		return nil
 	})
@@ -419,7 +431,7 @@ func Sleep(d time.Duration) Action {
 // Note that the function is called synchronously when handling events. As such,
 // the function should do as little work as possible and avoid blocking, as
 // otherwise the entire browser handler would get blocked.
-func ListenBrowser(ctx context.Context, fn func(v interface{}) error) {
+func ListenBrowser(ctx context.Context, fn func(ev interface{})) {
 	c := FromContext(ctx)
 	if c == nil {
 		panic(ErrInvalidContext)
@@ -437,7 +449,7 @@ func ListenBrowser(ctx context.Context, fn func(v interface{}) error) {
 // Note that the function is called synchronously when handling events. As such,
 // the function should do as little work as possible and avoid blocking, as
 // otherwise the entire target handler would get blocked.
-func ListenTarget(ctx context.Context, fn func(v interface{}) error) {
+func ListenTarget(ctx context.Context, fn func(ev interface{})) {
 	c := FromContext(ctx)
 	if c == nil {
 		panic(ErrInvalidContext)

@@ -4,29 +4,51 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"log"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
+	cdpruntime "github.com/nbzx/cdproto/runtime"
 )
+
+func writeHTML(content string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, strings.TrimSpace(content))
+	})
+}
 
 func ExampleTitle() {
 	ctx, cancel := chromedp.NewContext(context.Background())
 	defer cancel()
 
+	ts := httptest.NewServer(writeHTML(`
+<html>
+<head>
+	<title>fancy website title</title>
+</head>
+<body>
+	<div id="loaded"></div>
+</body>
+</html>
+	`))
+	defer ts.Close()
+
 	var title string
 	if err := chromedp.Run(ctx,
-		chromedp.Navigate("https://github.com/nbzx/chromedp/issues"),
-		chromedp.WaitVisible("#start-of-content", chromedp.ByID),
+		chromedp.Navigate(ts.URL),
+		chromedp.WaitVisible("#loaded", chromedp.ByID),
 		chromedp.Title(&title),
 	); err != nil {
 		panic(err)
 	}
-
 	fmt.Println(title)
 
-	// no expected output, to not run this test as part of 'go test'; it's
-	// too slow, requiring internet access.
+	// Output:
+	// fancy website title
 }
 
 func ExampleExecAllocator() {
@@ -95,4 +117,44 @@ func ExampleNewContext_manyTabs() {
 	// Output:
 	// Same browser: true
 	// Same tab: false
+}
+
+func ExampleListenTarget_consoleLog() {
+	ctx, cancel := chromedp.NewContext(context.Background())
+	defer cancel()
+
+	ts := httptest.NewServer(writeHTML(`
+<html>
+<body>
+<script>
+	console.log("hello js world")
+	var p = document.createElement("div");
+	p.setAttribute("id", "loaded");
+	document.body.appendChild(p);
+</script>
+</body>
+</html>
+	`))
+	defer ts.Close()
+
+	chromedp.ListenTarget(ctx, func(ev interface{}) {
+		switch ev := ev.(type) {
+		case *cdpruntime.EventConsoleAPICalled:
+			fmt.Printf("console.%s call:\n", ev.Type)
+			for _, arg := range ev.Args {
+				fmt.Printf("%s - %s\n", arg.Type, arg.Value)
+			}
+		}
+	})
+
+	if err := chromedp.Run(ctx,
+		chromedp.Navigate(ts.URL),
+		chromedp.WaitVisible("#loaded", chromedp.ByID),
+	); err != nil {
+		panic(err)
+	}
+
+	// Output:
+	// console.log call:
+	// string - "hello js world"
 }
