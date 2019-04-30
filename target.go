@@ -10,8 +10,6 @@ import (
 	"github.com/nbzx/cdproto"
 	"github.com/nbzx/cdproto/cdp"
 	"github.com/nbzx/cdproto/dom"
-	"github.com/nbzx/cdproto/runtime"
-	"github.com/nbzx/cdproto/inspector"
 	"github.com/nbzx/cdproto/page"
 	"github.com/nbzx/cdproto/target"
 )
