@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 	"strings"
+	"os"
 
 	"github.com/nbzx/cdproto/cdp"
 	"github.com/nbzx/cdproto/css"
@@ -196,8 +197,20 @@ func Shutdown(ctx context.Context) error {
 	if c == nil {
 		return ErrInvalidContext
 	}
-	return c.Browser.process.Kill()
+	return c.Browser.process.Signal(os.Kill)
+	//return c.Browser.process.Kill()
 }
+
+//获取进程id
+func GetBrowserProcess(ctx context.Context) (*os.Process, error) {
+	c := FromContext(ctx)
+	if c == nil {
+		return nil, ErrInvalidContext
+	}
+	return c.Browser.process, nil
+	//return c.Browser.process.Kill()
+}
+
 //等待chrome进程
 func Wait(ctx context.Context) {
 	c := FromContext(ctx)
