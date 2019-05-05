@@ -262,7 +262,7 @@ func (c *Context) newTarget(ctx context.Context) error {
 		}
 		pages := 0
 		for _, info := range infos {
-			if info.Type == "page" && info.URL == "about:blank" && !info.Attached {
+			if info.Type == "page" && !info.Attached {
 				c.targetID = info.TargetID
 				pages++
 			}
