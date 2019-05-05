@@ -32,7 +32,7 @@ func ExampleTitle() {
 	<title>fancy website title</title>
 </head>
 <body>
-	<div id="loaded"></div>
+	<div id="content"></div>
 </body>
 </html>
 	`))
@@ -41,7 +41,6 @@ func ExampleTitle() {
 	var title string
 	if err := chromedp.Run(ctx,
 		chromedp.Navigate(ts.URL),
-		chromedp.WaitVisible("#loaded", chromedp.ByID),
 		chromedp.Title(&title),
 	); err != nil {
 		panic(err)
@@ -130,7 +129,7 @@ func ExampleListenTarget_consoleLog() {
 <script>
 	console.log("hello js world")
 	var p = document.createElement("div");
-	p.setAttribute("id", "loaded");
+	p.setAttribute("id", "jsFinished");
 	document.body.appendChild(p);
 </script>
 </body>
@@ -150,7 +149,7 @@ func ExampleListenTarget_consoleLog() {
 
 	if err := chromedp.Run(ctx,
 		chromedp.Navigate(ts.URL),
-		chromedp.WaitVisible("#loaded", chromedp.ByID),
+		chromedp.WaitVisible("#jsFinished", chromedp.ByID),
 	); err != nil {
 		panic(err)
 	}

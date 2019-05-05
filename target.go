@@ -2,6 +2,7 @@ package chromedp
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -20,7 +21,8 @@ type Target struct {
 	SessionID target.SessionID
 	TargetID  target.ID
 
-	listeners []func(ev interface{})
+	listenersMu sync.Mutex
+	listeners   []cancelableListener
 
 	waitQueue  chan func() bool
 	eventQueue chan *cdproto.Message
@@ -86,9 +88,9 @@ func (t *Target) run(ctx context.Context) {
 					t.errf("could not unmarshal event: %v", err)
 					continue
 				}
-				for _, fn := range t.listeners {
-					fn(ev)
-				}
+				t.listenersMu.Lock()
+				t.listeners = runListeners(t.listeners, ev)
+				t.listenersMu.Unlock()
 				syncEventQueue <- eventValue{msg.Method, ev}
 			}
 		}
@@ -110,6 +112,21 @@ func (t *Target) run(ctx context.Context) {
 			tryWaits()
 		}
 	}
+}
+
+func runListeners(list []cancelableListener, ev interface{}) []cancelableListener {
+	for i := 0; i < len(list); {
+		listener := list[i]
+		select {
+		case <-listener.ctx.Done():
+			list = append(list[:i], list[i+1:]...)
+			continue
+		default:
+			listener.fn(ev)
+			i++
+		}
+	}
+	return list
 }
 
 func (t *Target) Execute(ctx context.Context, method string, params easyjson.Marshaler, res easyjson.Unmarshaler) error {
@@ -238,6 +255,8 @@ func (t *Target) pageEvent(ev interface{}) {
 	case *page.EventJavascriptDialogOpening:
 		return
 	case *page.EventJavascriptDialogClosed:
+		return
+	case *page.EventWindowOpen:
 		return
 
 	default:

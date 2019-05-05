@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"sync"
 	"time"
-	"strings"
 	"os"
 
 	"github.com/nbzx/cdproto/cdp"
@@ -40,8 +39,12 @@ type Context struct {
 	// have its own unique Target pointing to a separate browser tab (page).
 	Target *Target
 
-	browserListeners []func(ev interface{})
-	targetListeners  []func(ev interface{})
+	// targetID is set up by WithTargetID. If nil, Run will pick the only
+	// unused page target, or create a new one.
+	targetID target.ID
+
+	browserListeners []cancelableListener
+	targetListeners  []cancelableListener
 
 	// browserOpts holds the browser options passed to NewContext via
 	// WithBrowserOption, so that they can later be used when allocating a
@@ -239,7 +242,7 @@ func Run(ctx context.Context, actions ...Action) error {
 		c.Browser.listeners = append(c.Browser.listeners, c.browserListeners...)
 	}
 	if c.Target == nil {
-		if err := c.newSession(ctx); err != nil {
+		if err := c.newTarget(ctx); err != nil {
 			return err
 		}
 		c.Target.listeners = append(c.Target.listeners, c.targetListeners...)
@@ -247,9 +250,8 @@ func Run(ctx context.Context, actions ...Action) error {
 	return Tasks(actions).Do(cdp.WithExecutor(ctx, c.Target))
 }
 
-func (c *Context) newSession(ctx context.Context) error {
-	var targetID target.ID
-	if c.first {
+func (c *Context) newTarget(ctx context.Context) error {
+	if c.targetID == "" && c.first {
 		tries := 0
 	retry:
 		// If we just allocated this browser, and it has a single page
@@ -260,8 +262,8 @@ func (c *Context) newSession(ctx context.Context) error {
 		}
 		pages := 0
 		for _, info := range infos {
-			if info.Type == "page" && (info.URL == "about:blank" || strings.HasPrefix(info.URL, "http")) && !info.Attached {
-				targetID = info.TargetID
+			if info.Type == "page" && info.URL == "about:blank" && !info.Attached {
+				c.targetID = info.TargetID
 				pages++
 			}
 		}
@@ -277,18 +279,21 @@ func (c *Context) newSession(ctx context.Context) error {
 		}
 		if pages > 1 {
 			// Multiple blank pages; just in case, don't use any.
-			targetID = ""
+			c.targetID = ""
 		}
 	}
 
-	if targetID == "" {
+	if c.targetID == "" {
 		var err error
-		targetID, err = target.CreateTarget("about:blank").Do(cdp.WithExecutor(ctx, c.Browser))
+		c.targetID, err = target.CreateTarget("about:blank").Do(cdp.WithExecutor(ctx, c.Browser))
 		if err != nil {
 			return err
 		}
 	}
+	return c.attachTarget(ctx, c.targetID)
+}
 
+func (c *Context) attachTarget(ctx context.Context, targetID target.ID) error {
 	sessionID, err := target.AttachToTarget(targetID).Do(cdp.WithExecutor(ctx, c.Browser))
 	if err != nil {
 		return err
@@ -296,8 +301,8 @@ func (c *Context) newSession(ctx context.Context) error {
 
 	c.Target = c.Browser.newExecutorForTarget(ctx, targetID, sessionID)
 
-	// enable domains
-	for _, enable := range []Action{
+	for _, action := range []Action{
+		// enable domains
 		log.Enable(),
 		runtime.Enable(),
 		network.Enable(),
@@ -305,9 +310,12 @@ func (c *Context) newSession(ctx context.Context) error {
 		page.Enable(),
 		dom.Enable(),
 		css.Enable(),
+
+		// receive events when targets appear or disappear
+		target.SetDiscoverTargets(true),
 	} {
-		if err := enable.Do(cdp.WithExecutor(ctx, c.Target)); err != nil {
-			return fmt.Errorf("unable to execute %T: %v", enable, err)
+		if err := action.Do(cdp.WithExecutor(ctx, c.Target)); err != nil {
+			return fmt.Errorf("unable to execute %T: %v", action, err)
 		}
 	}
 	return nil
@@ -315,6 +323,12 @@ func (c *Context) newSession(ctx context.Context) error {
 
 // ContextOption is a context option.
 type ContextOption func(*Context)
+
+// WithTargetID sets up a context to be attached to an existing target, instead
+// of creating a new one.
+func WithTargetID(id target.ID) ContextOption {
+	return func(c *Context) { c.targetID = id }
+}
 
 // WithLogf is a shortcut for WithBrowserOption(WithBrowserLogf(f)).
 func WithLogf(f func(string, ...interface{})) ContextOption {
@@ -410,37 +424,52 @@ func Sleep(d time.Duration) Action {
 	})
 }
 
+type cancelableListener struct {
+	ctx context.Context
+	fn  func(ev interface{})
+}
+
 // ListenBrowser adds a function which will be called whenever a browser event
-// is received on the chromedp context.
+// is received on the chromedp context. Cancelling ctx stops the listener from
+// receiving any more events.
 //
-// Note that the function is called synchronously when handling events. As such,
-// the function should do as little work as possible and avoid blocking, as
-// otherwise the entire browser handler would get blocked.
+// Note that the function is called synchronously when handling events. It can
+// run Actions under some circumstances, but the function should avoid blocking
+// whenever possible.
 func ListenBrowser(ctx context.Context, fn func(ev interface{})) {
 	c := FromContext(ctx)
 	if c == nil {
 		panic(ErrInvalidContext)
 	}
+	cl := cancelableListener{ctx, fn}
 	if c.Browser != nil {
-		panic("ListenBrowser must be used before a browser is created")
+		c.Browser.listenersMu.Lock()
+		c.Browser.listeners = append(c.Browser.listeners, cl)
+		c.Browser.listenersMu.Unlock()
+	} else {
+		c.browserListeners = append(c.browserListeners, cl)
 	}
-	c.browserListeners = append(c.browserListeners, fn)
 }
 
 // ListenTarget adds a function which will be called whenever a target event is
 // received on the chromedp context. Note that this only includes browser
-// events; command responses and target events are not included.
+// events; command responses and target events are not included. Cancelling ctx
+// stops the listener from receiving any more events.
 //
-// Note that the function is called synchronously when handling events. As such,
-// the function should do as little work as possible and avoid blocking, as
-// otherwise the entire target handler would get blocked.
+// Note that the function is called synchronously when handling events. It can
+// run Actions under some circumstances, but the function should avoid blocking
+// whenever possible.
 func ListenTarget(ctx context.Context, fn func(ev interface{})) {
 	c := FromContext(ctx)
 	if c == nil {
 		panic(ErrInvalidContext)
 	}
+	cl := cancelableListener{ctx, fn}
 	if c.Target != nil {
-		panic("ListenTarget must be used before a target is created")
+		c.Target.listenersMu.Lock()
+		c.Target.listeners = append(c.Target.listeners, cl)
+		c.Target.listenersMu.Unlock()
+	} else {
+		c.targetListeners = append(c.targetListeners, cl)
 	}
-	c.targetListeners = append(c.targetListeners, fn)
 }

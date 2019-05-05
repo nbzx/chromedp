@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -30,7 +31,10 @@ type Browser struct {
 	// cancelled (and the handler stopped) once the connection has failed.
 	LostConnection chan struct{}
 
-	listeners []func(ev interface{})
+	dialTimeout time.Duration
+
+	listenersMu sync.Mutex
+	listeners   []cancelableListener
 
 	conn Transport
 
@@ -85,10 +89,13 @@ type cmdJob struct {
 	respID int64
 }
 
-// NewBrowser creates a new browser.
+// NewBrowser creates a new browser. Typically, this function wouldn't be called
+// directly, as the Allocator interface takes care of it.
 func NewBrowser(ctx context.Context, urlstr string, opts ...BrowserOption) (*Browser, error) {
 	b := &Browser{
 		LostConnection: make(chan struct{}),
+
+		dialTimeout: 10 * time.Second,
 
 		newTabQueue: make(chan *Target),
 		delTabQueue: make(chan target.SessionID, 1),
@@ -108,10 +115,16 @@ func NewBrowser(ctx context.Context, urlstr string, opts ...BrowserOption) (*Bro
 		b.errf = func(s string, v ...interface{}) { b.logf("ERROR: "+s, v...) }
 	}
 
-	// dial
+	dialCtx := ctx
+	if b.dialTimeout > 0 {
+		var cancel context.CancelFunc
+		dialCtx, cancel = context.WithTimeout(ctx, b.dialTimeout)
+		defer cancel()
+	}
+
 	var err error
 	urlstr = forceIP(urlstr)
-	b.conn, err = DialContext(ctx, urlstr, WithConnDebugf(b.dbgf))
+	b.conn, err = DialContext(dialCtx, urlstr, WithConnDebugf(b.dbgf))
 	if err != nil {
 		return nil, fmt.Errorf("could not dial %q: %v", urlstr, err)
 	}
@@ -291,9 +304,9 @@ func (b *Browser) run(ctx context.Context) {
 						b.errf("%s", err)
 						continue
 					}
-					for _, fn := range b.listeners {
-						fn(ev)
-					}
+					b.listenersMu.Lock()
+					b.listeners = runListeners(b.listeners, ev)
+					b.listenersMu.Unlock()
 					switch ev := ev.(type) {
 					case *target.EventDetachedFromTarget:
 						b.delTabQueue <- ev.SessionID
@@ -436,6 +449,12 @@ func WithBrowserDebugf(f func(string, ...interface{})) BrowserOption {
 //
 // Note: NOT YET IMPLEMENTED.
 func WithConsolef(f func(string, ...interface{})) BrowserOption {
-	return func(b *Browser) {
-	}
+	return func(b *Browser) {}
+}
+
+// WithDialTimeout is a browser option to specify the timeout when dialing a
+// browser's websocket address. The default is ten seconds; use a zero duration
+// to not use a timeout.
+func WithDialTimeout(d time.Duration) BrowserOption {
+	return func(b *Browser) { b.dialTimeout = d }
 }
