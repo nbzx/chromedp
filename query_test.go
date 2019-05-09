@@ -3,8 +3,7 @@ package chromedp
 import (
 	"bytes"
 	"fmt"
-	"image"
-	_ "image/png"
+	"image/png"
 	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
@@ -109,7 +108,7 @@ func TestFocusBlur(t *testing.T) {
 		}
 
 		if value != "9999" {
-			t.Errorf("test %d expected value is '9999', got: '%s'", i, value)
+			t.Errorf("test %d expected value is '9999', got: %q", i, value)
 		}
 		if err := Run(ctx,
 			Blur(test.sel, test.by),
@@ -119,7 +118,7 @@ func TestFocusBlur(t *testing.T) {
 		}
 
 		if value != "0" {
-			t.Errorf("test %d expected value is '0', got: '%s'", i, value)
+			t.Errorf("test %d expected value is '0', got: %q", i, value)
 		}
 	}
 }
@@ -178,7 +177,7 @@ func TestText(t *testing.T) {
 		}
 
 		if text != test.exp {
-			t.Errorf("test %d expected `%s`, got: %s", i, test.exp, text)
+			t.Errorf("test %d expected %q, got: %s", i, test.exp, text)
 		}
 	}
 }
@@ -220,7 +219,7 @@ func TestClear(t *testing.T) {
 				t.Fatalf("got error: %v", err)
 			}
 			if val == "" {
-				t.Errorf("expected `%s` to have non empty value", test.sel)
+				t.Errorf("expected %q to have non empty value", test.sel)
 			}
 			if err := Run(ctx,
 				Clear(test.sel, test.by),
@@ -229,7 +228,7 @@ func TestClear(t *testing.T) {
 				t.Fatalf("got error: %v", err)
 			}
 			if val != "" {
-				t.Errorf("expected empty value for `%s`, got: %s", test.sel, val)
+				t.Errorf("expected empty value for %q, got: %s", test.sel, val)
 			}
 		})
 	}
@@ -268,7 +267,7 @@ func TestReset(t *testing.T) {
 			}
 
 			if value != test.exp {
-				t.Errorf("expected value after reset is %s, got: '%s'", test.exp, value)
+				t.Errorf("expected value after reset is %s, got: %q", test.exp, value)
 			}
 		})
 	}
@@ -665,7 +664,7 @@ func TestClick(t *testing.T) {
 			}
 
 			if title != "this is title" {
-				t.Errorf("expected title to be 'chromedp - Google Search', got: '%s'", title)
+				t.Errorf("expected title to be 'chromedp - Google Search', got: %q", title)
 			}
 		})
 	}
@@ -701,7 +700,7 @@ func TestDoubleClick(t *testing.T) {
 			}
 
 			if value != "1" {
-				t.Errorf("expected value to be '1', got: '%s'", value)
+				t.Errorf("expected value to be '1', got: %q", value)
 			}
 		})
 	}
@@ -764,9 +763,8 @@ func TestScreenshot(t *testing.T) {
 	}
 
 	// a smaller viewport speeds up this test
-	width, height := 650, 450
 	if err := Run(ctx, emulation.SetDeviceMetricsOverride(
-		int64(width), int64(height), 1.0, false,
+		600, 400, 1.0, false,
 	)); err != nil {
 		t.Fatal(err)
 	}
@@ -780,18 +778,61 @@ func TestScreenshot(t *testing.T) {
 		if len(buf) == 0 {
 			t.Fatalf("test %d failed to capture screenshot", i)
 		}
-		config, format, err := image.DecodeConfig(bytes.NewReader(buf))
+		img, err := png.Decode(bytes.NewReader(buf))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if want := "png"; format != want {
-			t.Fatalf("expected format to be %q, got %q", want, format)
-		}
-		if config.Width != test.size || config.Height != test.size {
+		size := img.Bounds().Size()
+		if size.X != test.size || size.Y != test.size {
 			t.Fatalf("expected dimensions to be %d*%d, got %d*%d",
-				test.size, test.size, config.Width, config.Height)
+				test.size, test.size, size.X, size.Y)
 		}
 	}
+}
+
+func TestScreenshotHighDPI(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := testAllocate(t, "image.html")
+	defer cancel()
+
+	// Use a weird screen dimension with a 1.5 scale factor, so that
+	// cropping the screenshot is forced to use floating point arithmetic
+	// and keep the high DPI in mind.
+	if err := Run(ctx, emulation.SetDeviceMetricsOverride(
+		605, 405, 1.5, false,
+	)); err != nil {
+		t.Fatal(err)
+	}
+
+	var buf []byte
+	if err := Run(ctx, Screenshot("#half-color", &buf, ByID)); err != nil {
+		t.Fatal(err)
+	}
+	img, err := png.Decode(bytes.NewReader(buf))
+	if err != nil {
+		t.Fatal(err)
+	}
+	size := img.Bounds().Size()
+	wantSize := 300 // 200px at 1.5 scaling factor
+	if size.X != wantSize || size.Y != wantSize {
+		t.Fatalf("expected dimensions to be %d*%d, got %d*%d",
+			wantSize, wantSize, size.X, size.Y)
+	}
+	wantColor := func(x, y int, r, g, b, a uint32) {
+		color := img.At(x, y)
+		r_, g_, b_, a_ := color.RGBA()
+		if r_ != r || g_ != g || b_ != b || a_ != a {
+			t.Errorf("got 0x%04x%04x%04x%04x at (%d,%d), want 0x%04x%04x%04x%04x",
+				r_, g_, b_, a_, x, y, r, g, b, a)
+		}
+	}
+	// The left half is blue.
+	wantColor(5, 5, 0x0, 0x0, 0xffff, 0xffff)
+	wantColor(5, 295, 0x0, 0x0, 0xffff, 0xffff)
+	// The right half is red.
+	wantColor(295, 5, 0xffff, 0x0, 0x0, 0xffff)
+	wantColor(295, 295, 0xffff, 0x0, 0x0, 0xffff)
 }
 
 func TestSubmit(t *testing.T) {
@@ -825,7 +866,7 @@ func TestSubmit(t *testing.T) {
 			}
 
 			if title != "this is title" {
-				t.Errorf("expected title to be 'this is title', got: '%s'", title)
+				t.Errorf("expected title to be 'this is title', got: %q", title)
 			}
 		})
 	}
