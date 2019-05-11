@@ -3,7 +3,6 @@ package chromedp
 import (
 	"context"
 	"fmt"
-	"io"
 	"log"
 	"net"
 	"os"
@@ -18,6 +17,7 @@ import (
 	"github.com/nbzx/cdproto/target"
 	easyjson "github.com/mailru/easyjson"
 	jlexer "github.com/mailru/easyjson/jlexer"
+	jwriter "github.com/mailru/easyjson/jwriter"
 )
 
 // Browser is the high-level Chrome DevTools Protocol browser manager, handling
@@ -68,13 +68,6 @@ type Browser struct {
 
 // TODO: move Transport to the same file as its default implementation once we
 // settle on one websocket library.
-
-// Transport is the common interface to send/receive messages to a target.
-type Transport interface {
-	Read(context.Context, *cdproto.Message) error
-	Write(context.Context, *cdproto.Message) error
-	io.Closer
-}
 
 type cmdJob struct {
 	// msg is the message being sent.
@@ -181,22 +174,25 @@ func (b *Browser) newExecutorForTarget(targetID target.ID, sessionID target.Sess
 	return t
 }
 
-func (b *Browser) Execute(ctx context.Context, method string, params easyjson.Marshaler, res easyjson.Unmarshaler) error {
-	paramsMsg := emptyObj
-	if params != nil {
-		var err error
-		if paramsMsg, err = easyjson.Marshal(params); err != nil {
-			return err
-		}
+func rawMarshal(v easyjson.Marshaler) easyjson.RawMessage {
+	if v == nil {
+		return nil
 	}
+	buf, err := easyjson.Marshal(v)
+	if err != nil {
+		panic(err)
+	}
+	return buf
+}
 
+func (b *Browser) Execute(ctx context.Context, method string, params easyjson.Marshaler, res easyjson.Unmarshaler) error {
 	id := atomic.AddInt64(&b.next, 1)
 	ch := make(chan *cdproto.Message, 1)
 	b.cmdQueue <- cmdJob{
 		msg: &cdproto.Message{
 			ID:     id,
 			Method: cdproto.MethodType(method),
-			Params: paramsMsg,
+			Params: rawMarshal(params),
 		},
 		resp: ch,
 	}
@@ -226,20 +222,36 @@ type tabEvent struct {
 //easyjson:json
 type eventReceivedMessageFromTarget struct {
 	SessionID target.SessionID `json:"sessionId"`
-	Message   messageString    `json:"message"`
+	Message   decMessageString `json:"message"`
 }
 
-type messageString struct {
+type decMessageString struct {
 	lexer jlexer.Lexer // to avoid an alloc
-	M     cdproto.Message
+	m     cdproto.Message
 }
 
-func (m *messageString) UnmarshalEasyJSON(l *jlexer.Lexer) {
+func (m *decMessageString) UnmarshalEasyJSON(l *jlexer.Lexer) {
 	if l.IsNull() {
 		l.Skip()
 	} else {
-		l.AddError(unmarshal(&m.lexer, l.UnsafeBytes(), &m.M))
+		l.AddError(unmarshal(&m.lexer, l.UnsafeBytes(), &m.m))
 	}
+}
+
+//easyjson:json
+type sendMessageToTargetParams struct {
+	Message   encMessageString `json:"message"`
+	SessionID target.SessionID `json:"sessionId,omitempty"`
+}
+
+type encMessageString struct {
+	Message cdproto.Message
+}
+
+func (m encMessageString) MarshalEasyJSON(w *jwriter.Writer) {
+	var w2 jwriter.Writer
+	m.Message.MarshalEasyJSON(&w2)
+	w.RawText(w2.BuildBytes(nil))
 }
 
 func (b *Browser) run(ctx context.Context) {
@@ -288,7 +300,7 @@ func (b *Browser) run(ctx context.Context) {
 					continue
 				}
 				sessionID = ev.SessionID
-				msg = &ev.Message.M
+				msg = &ev.Message.m
 			} else {
 				// We're passing along readMsg to another
 				// goroutine, so we must make a copy of it.
@@ -351,7 +363,9 @@ func (b *Browser) run(ctx context.Context) {
 			case event := <-tabEventQueue:
 				page, ok := pages[event.sessionID]
 				if !ok {
-					b.errf("unknown session ID %q", event.sessionID)
+					// Most likely, this is a page we
+					// recently closed, but is still sending
+					// events. Ignore it.
 					continue
 				}
 				page.eventQueue <- event.msg
