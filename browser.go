@@ -43,10 +43,6 @@ type Browser struct {
 	// via newTabResult.
 	newTabQueue chan *Target
 
-	// delTabQueue is used to clean up target handlers after the sessions
-	// are detached.
-	delTabQueue chan target.SessionID
-
 	// cmdQueue is the outgoing command queue.
 	cmdQueue chan cmdJob
 
@@ -91,7 +87,6 @@ func NewBrowser(ctx context.Context, urlstr string, opts ...BrowserOption) (*Bro
 		dialTimeout: 10 * time.Second,
 
 		newTabQueue: make(chan *Target),
-		delTabQueue: make(chan target.SessionID, 1),
 
 		// Fit some jobs without blocking, to reduce blocking in
 		// Execute.
@@ -318,12 +313,12 @@ func (b *Browser) run(ctx context.Context) {
 					b.listenersMu.Lock()
 					b.listeners = runListeners(b.listeners, ev)
 					b.listenersMu.Unlock()
-					switch ev := ev.(type) {
-					case *target.EventDetachedFromTarget:
-						b.delTabQueue <- ev.SessionID
-					default:
-						// TODO: are any other browser
-						// events useful?
+					// TODO: are other browser events useful?
+					if ev, ok := ev.(*target.EventDetachedFromTarget); ok {
+						tabEventQueue <- tabEvent{
+							sessionID: ev.SessionID,
+							msg:       msg,
+						}
 					}
 					continue
 				}
@@ -341,67 +336,16 @@ func (b *Browser) run(ctx context.Context) {
 		}
 	}()
 
-	// This goroutine handles tabs, as well as routing events to each tab
-	// via the pages map.
-	go func() {
-		ticker := time.NewTicker(2 * time.Millisecond)
-		defer ticker.Stop()
-
-		// This map is only safe for use within this goroutine, so don't
-		// declare it as a Browser field.
-		pages := make(map[target.SessionID]*Target, 32)
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case t := <-b.newTabQueue:
-				if _, ok := pages[t.SessionID]; ok {
-					b.errf("executor for %q already exists", t.SessionID)
-				}
-				pages[t.SessionID] = t
-
-			case event := <-tabEventQueue:
-				page, ok := pages[event.sessionID]
-				if !ok {
-					// Most likely, this is a page we
-					// recently closed, but is still sending
-					// events. Ignore it.
-					continue
-				}
-				page.eventQueue <- event.msg
-
-			case sessionID := <-b.delTabQueue:
-				if _, ok := pages[sessionID]; !ok {
-					b.errf("executor for %q doesn't exist", sessionID)
-				}
-				delete(pages, sessionID)
-
-			case t := <-ticker.C:
-				// Roughly once every 2ms, give every target a
-				// chance to run periodic work like checking if
-				// a wait function is complete.
-				//
-				// If a target hasn't picked up the previous
-				// tick, skip it.
-				for _, target := range pages {
-					select {
-					case target.tick <- t:
-					default:
-					}
-				}
-
-			}
-		}
-	}()
-
+	pages := make(map[target.SessionID]*Target, 32)
 	respByID := make(map[int64]chan *cdproto.Message)
 
-	// This goroutine handles sending commands to the browser, and sending
-	// responses back for each of these commands via respByID.
+	ticker := time.NewTicker(2 * time.Millisecond)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
+
 		case res := <-resQueue:
 			resp, ok := respByID[res.ID]
 			if !ok {
@@ -431,6 +375,43 @@ func (b *Browser) run(ctx context.Context) {
 			if err := b.conn.Write(ctx, q.msg); err != nil {
 				b.errf("%s", err)
 				continue
+			}
+
+		case t := <-b.newTabQueue:
+			if _, ok := pages[t.SessionID]; ok {
+				b.errf("executor for %q already exists", t.SessionID)
+			}
+			pages[t.SessionID] = t
+
+		case event := <-tabEventQueue:
+			page, ok := pages[event.sessionID]
+			if !ok {
+				// Most likely, this is a page we recently
+				// closed, but is still sending events. Ignore
+				// it.
+				continue
+			}
+			page.eventQueue <- event.msg
+			if event.msg.Method == cdproto.EventTargetDetachedFromTarget {
+				if _, ok := pages[event.sessionID]; !ok {
+					b.errf("executor for %q doesn't exist", event.sessionID)
+				}
+				delete(pages, event.sessionID)
+				break
+			}
+
+		case t := <-ticker.C:
+			// Roughly once every 2ms, give every target a
+			// chance to run periodic work like checking if
+			// a wait function is complete.
+			//
+			// If a target hasn't picked up the previous
+			// tick, skip it.
+			for _, target := range pages {
+				select {
+				case target.tick <- t:
+				default:
+				}
 			}
 
 		case <-b.LostConnection:
