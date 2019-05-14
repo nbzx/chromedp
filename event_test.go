@@ -132,9 +132,11 @@ func TestCloseDialog(t *testing.T) {
 					if test.promptText != "" {
 						task = task.WithPromptText(test.promptText)
 					}
-					//if err := Run(ctx, task); err != nil {
-					//	t.Error(err)
-					//}
+					go func() {
+						if err := Run(ctx, task); err != nil {
+							t.Error(err)
+						}
+					}()
 				case *page.EventJavascriptDialogClosed:
 					if e.Result != test.accept {
 						t.Errorf("expected result to be %t, got %t", test.accept, e.Result)
@@ -160,12 +162,11 @@ func TestClickNewTab(t *testing.T) {
 
 	ctx, cancel := testAllocate(t, "newtab.html")
 	defer cancel()
-	targetID := FromContext(ctx).Target.TargetID
 
 	ch := make(chan target.ID, 1)
 	ListenTarget(ctx, func(ev interface{}) {
 		if ev, ok := ev.(*target.EventTargetCreated); ok &&
-			ev.TargetInfo.OpenerID == targetID {
+			ev.TargetInfo.OpenerID != "" {
 			ch <- ev.TargetInfo.TargetID
 		}
 	})
