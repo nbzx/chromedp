@@ -249,6 +249,28 @@ func Run(ctx context.Context, actions ...Action) error {
 	return Tasks(actions).Do(cdp.WithExecutor(ctx, c.Target))
 }
 
+// Run runs an action against context. The provided context must be a valid
+// chromedp context, typically created via NewContext.
+func RunNotNewBrowser(ctx context.Context, actions ...Action) error {
+	c := FromContext(ctx)
+	// If c is nil, it's not a chromedp context.
+	// If c.Allocator is nil, NewContext wasn't used properly.
+	// If c.cancel is nil, Run is being called directly with an allocator
+	// context.
+	if c == nil || c.Allocator == nil || c.cancel == nil {
+		return ErrInvalidContext
+	}
+	if c.Browser == nil {
+		return nil
+	}
+	if c.Target == nil {
+		if err := c.newTarget(ctx); err != nil {
+			return err
+		}
+	}
+	return Tasks(actions).Do(cdp.WithExecutor(ctx, c.Target))
+}
+
 func (c *Context) newTarget(ctx context.Context) error {
 	if c.targetID == "" && c.first {
 		tries := 0
