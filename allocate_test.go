@@ -1,6 +1,7 @@
 package chromedp
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io/ioutil"
@@ -8,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -154,7 +156,7 @@ func TestRemoteAllocator(t *testing.T) {
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	wsURL, err := addrFromStderr(stderr)
+	wsURL, err := readOutput(stderr, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -232,9 +234,35 @@ func TestExecAllocatorMissingWebsocketAddr(t *testing.T) {
 	ctx, cancel := NewContext(allocCtx)
 	defer cancel()
 
-	want := "stopped too early"
+	want := regexp.MustCompile(`failed to start:\n.*Invalid devtools`)
 	got := fmt.Sprintf("%v", Run(ctx))
-	if !strings.Contains(got, want) {
-		t.Fatalf("want error to contain %q, got %q", want, got)
+	if !want.MatchString(got) {
+		t.Fatalf("want error to match %q, got %q", want, got)
+	}
+}
+
+func TestCombinedOutput(t *testing.T) {
+	t.Parallel()
+
+	buf := new(bytes.Buffer)
+	allocCtx, cancel := NewExecAllocator(context.Background(),
+		append([]ExecAllocatorOption{
+			CombinedOutput(buf),
+			Flag("enable-logging", true),
+		}, allocOpts...)...)
+	defer cancel()
+
+	taskCtx, _ := NewContext(allocCtx)
+	if err := Run(taskCtx,
+		Navigate(testdataDir+"/consolespam.html"),
+	); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	if !strings.Contains(buf.String(), "DevTools listening on") {
+		t.Fatalf("failed to find websocket string in browser output test")
+	}
+	if want, got := 2000, strings.Count(buf.String(), `"spam"`); want != got {
+		t.Fatalf("want %d spam console logs, got %d", want, got)
 	}
 }

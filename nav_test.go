@@ -2,9 +2,11 @@ package chromedp
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"image"
 	_ "image/png"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -322,5 +324,82 @@ func TestLoadIframe(t *testing.T) {
 		WaitVisible(`#parent`, ByID), // for iframe.html
 	}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestNavigateContextTimeout(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := testAllocate(t, "")
+	defer cancel()
+
+	// Serve the page, but cancel the context almost immediately after.
+	// Navigate shouldn't block waiting for the load to finish, which may
+	// not come as the target is cancelled.
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		go func() {
+			time.Sleep(time.Millisecond)
+			cancel()
+		}()
+	}))
+	defer s.Close()
+
+	if err := Run(ctx, Navigate(s.URL)); err != nil && err != context.Canceled {
+		t.Fatal(err)
+	}
+}
+
+func writeHTML(content string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		io.WriteString(w, strings.TrimSpace(content))
+	})
+}
+
+func TestClickNavigate(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := testAllocate(t, "")
+	defer cancel()
+
+	mux := http.NewServeMux()
+	mux.Handle("/", writeHTML(`
+<img src="/img.jpg"></img>
+	`))
+	ch := make(chan bool)
+	mux.Handle("/img.jpg", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-ch
+	}))
+	s := httptest.NewServer(mux)
+	defer s.Close()
+
+	// First, navigate to a page that starts loading, but doesn't finish.
+	// Then, tell the server to finish loading the page.
+	// Immediately after, navigate to another page.
+	// Finally, grab the page title, which should correspond with the last
+	// page.
+	//
+	// This has caused problems in the past. Because the first page might
+	// fire its load event just as we start the second navigate, the second
+	// navigate used to get confused, either blocking forever or not waiting
+	// for the right load event (the second).
+	var title string
+	if err := Run(ctx, Tasks{
+		ActionFunc(func(ctx context.Context) error {
+			_, _, _, err := page.Navigate(s.URL).Do(ctx)
+			return err
+		}),
+		ActionFunc(func(ctx context.Context) error {
+			ch <- true
+			return nil
+		}),
+		Navigate(testdataDir + "/image.html"),
+		Title(&title),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	exptitle := "this is title"
+	if title != exptitle {
+		t.Errorf("want title to be %q, got %q", exptitle, title)
 	}
 }
