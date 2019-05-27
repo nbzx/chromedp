@@ -13,7 +13,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-	"github.com/nbzx/cdproto/target"
 )
 
 func TestExecAllocator(t *testing.T) {
