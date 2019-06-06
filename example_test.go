@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"github.com/nbzx/cdproto/network"
 	"github.com/nbzx/cdproto/page"
 	cdpruntime "github.com/nbzx/cdproto/runtime"
 	"github.com/nbzx/cdproto/target"
@@ -59,13 +60,10 @@ func ExampleExecAllocator() {
 	}
 	defer os.RemoveAll(dir)
 
-	opts := []chromedp.ExecAllocatorOption{
-		chromedp.NoFirstRun,
-		chromedp.NoDefaultBrowserCheck,
-		chromedp.Headless,
+	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.DisableGPU,
 		chromedp.UserDataDir(dir),
-	}
+	)
 
 	allocCtx, cancel := chromedp.NewExecAllocator(context.Background(), opts...)
 	defer cancel()
@@ -158,7 +156,7 @@ func ExampleListenTarget_consoleLog() {
 	// string - "hello js world"
 }
 
-func ExampleClickNewTab() {
+func ExampleWaitNewTarget() {
 	ctx, cancel := chromedp.NewContext(context.Background())
 	defer cancel()
 
@@ -170,15 +168,9 @@ func ExampleClickNewTab() {
 	ts := httptest.NewServer(mux)
 	defer ts.Close()
 
-	lctx, cancel := context.WithCancel(ctx)
-	ch := make(chan target.ID, 1)
-	chromedp.ListenTarget(lctx, func(ev interface{}) {
-		if ev, ok := ev.(*target.EventTargetCreated); ok &&
-			// if OpenerID == "", this is the first tab.
-			ev.TargetInfo.OpenerID != "" {
-			ch <- ev.TargetInfo.TargetID
-			cancel()
-		}
+	// Grab the first spawned tab that isn't blank.
+	ch := chromedp.WaitNewTarget(ctx, func(info *target.Info) bool {
+		return info.URL != ""
 	})
 	if err := chromedp.Run(ctx,
 		chromedp.Navigate(ts.URL+"/first"),
@@ -199,7 +191,7 @@ func ExampleClickNewTab() {
 	// new tab's path: /second
 }
 
-func ExampleAcceptAlert() {
+func ExampleListenTarget_acceptAlert() {
 	ctx, cancel := chromedp.NewContext(context.Background())
 	defer cancel()
 
@@ -232,4 +224,74 @@ func ExampleAcceptAlert() {
 
 	// Output:
 	// closing alert: alert text
+}
+
+func Example_retrieveHTML() {
+	ctx, cancel := chromedp.NewContext(context.Background())
+	defer cancel()
+
+	ts := httptest.NewServer(writeHTML(`
+<body>
+<p id="content" onclick="changeText()">Original content.</p>
+<script>
+function changeText() {
+	document.getElementById("content").textContent = "New content!"
+}
+</script>
+</body>
+	`))
+	defer ts.Close()
+
+	respBody := make(chan string)
+	chromedp.ListenTarget(ctx, func(ev interface{}) {
+		ev2, ok := ev.(*network.EventResponseReceived)
+		if !ok {
+			return
+		}
+		go func() {
+			if err := chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+				body, err := network.GetResponseBody(ev2.RequestID).Do(ctx)
+				respBody <- string(body)
+				return err
+			})); err != nil {
+				panic(err)
+			}
+		}()
+	})
+
+	var outerBefore, outerAfter string
+	if err := chromedp.Run(ctx,
+		network.Enable(),
+		chromedp.Navigate(ts.URL),
+		chromedp.OuterHTML("#content", &outerBefore),
+		chromedp.Click("#content", chromedp.ByID),
+		chromedp.OuterHTML("#content", &outerAfter),
+	); err != nil {
+		panic(err)
+	}
+	fmt.Println("Original response body:")
+	fmt.Println(<-respBody)
+	fmt.Println()
+	fmt.Println("OuterHTML before clicking:")
+	fmt.Println(outerBefore)
+	fmt.Println("OuterHTML after clicking:")
+	fmt.Println(outerAfter)
+
+	// TODO: reenable once we fix the race with EventResponseReceived. The
+	// code needs to wait for EventLoadingFinished.
+	// Output:
+	// Original response body:
+	// <body>
+	// <p id="content" onclick="changeText()">Original content.</p>
+	// <script>
+	// function changeText() {
+	// 	document.getElementById("content").textContent = "New content!"
+	// }
+	// </script>
+	// </body>
+	//
+	// OuterHTML before clicking:
+	// <p id="content" onclick="changeText()">Original content.</p>
+	// OuterHTML after clicking:
+	// <p id="content" onclick="changeText()">New content!</p>
 }

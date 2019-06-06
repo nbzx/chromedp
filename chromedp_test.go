@@ -6,6 +6,8 @@ import (
 	"io/ioutil"
 	"log"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path"
 	"strings"
@@ -14,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nbzx/cdproto/cdp"
 	"github.com/nbzx/cdproto/dom"
 	"github.com/nbzx/cdproto/page"
 	cdpruntime "github.com/nbzx/cdproto/runtime"
@@ -24,7 +27,7 @@ var (
 	// these are set up in init
 	execPath    string
 	testdataDir string
-	allocOpts   []ExecAllocatorOption
+	allocOpts   = DefaultExecAllocatorOptions[:]
 
 	// allocCtx is initialised in TestMain, to cancel before exiting.
 	allocCtx context.Context
@@ -44,9 +47,6 @@ func init() {
 	if err != nil {
 		panic(fmt.Sprintf("could not create temp directory: %v", err))
 	}
-
-	// Build on top of the default options.
-	allocOpts = append(allocOpts, DefaultExecAllocatorOptions[:]...)
 
 	// Disabling the GPU helps portability with some systems like Travis,
 	// and can slightly speed up the tests on other systems.
@@ -402,6 +402,36 @@ func TestLargeEventCount(t *testing.T) {
 	if err := Run(ctx,
 		Navigate(testdataDir+"/consolespam.html"),
 		WaitVisible("#done", ByID), // wait for the JS to finish
+	); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLargeQuery(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := testAllocate(t, "")
+	defer cancel()
+
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, "<html><body>\n")
+		for i := 0; i < 2000; i++ {
+			fmt.Fprintf(w, `<div>`)
+			fmt.Fprintf(w, `<a href="/%d">link %d</a>`, i, i)
+			fmt.Fprintf(w, `</div>`)
+		}
+		fmt.Fprintf(w, "</body></html>\n")
+	}))
+	defer s.Close()
+
+	// ByQueryAll queries thousands of events, which triggers thousands of
+	// DOM events. The target handler used to get into a deadlock, as the
+	// event queues would fill up and prevent the wait function from
+	// receiving any result.
+	var nodes []*cdp.Node
+	if err := Run(ctx,
+		Navigate(s.URL),
+		Nodes("a", &nodes, ByQueryAll),
 	); err != nil {
 		t.Fatal(err)
 	}
